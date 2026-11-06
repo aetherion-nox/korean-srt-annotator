@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>韩语 SRT 字幕标注</title><link rel="icon" href="icons/icon32.png"><link rel="stylesheet" href="srt.css"></head>
+<body><main>
+<header><div class="brand"><img src="icons/icon48.png" width="48" height="48" alt=""><div><h1>韩语 SRT 字幕标注</h1><p>汉字与外来语，随字幕一起看。</p></div></div><button id="settings" type="button">词典 / API 设置</button></header>
+<section class="card"><h2>1. 导入字幕</h2><p>支持纯韩语及双语 SRT。只分析韩语，保留其他语言、时间轴、换行和字幕样式。</p>
+<div class="file-row"><label class="file-label">选择 SRT 文件<input id="subtitleFile" type="file" accept=".srt,application/x-subrip,text/plain"></label><label>输入编码<select id="encoding"><option value="auto">自动（UTF-8 / UTF-16 / CP949）</option><option value="utf-8">UTF-8</option><option value="euc-kr">CP949 / EUC-KR</option><option value="utf-16le">UTF-16 LE</option><option value="utf-16be">UTF-16 BE</option></select></label></div>
+<label class="hint"><input id="filterUntimedLines" type="checkbox" checked> 过滤无时间轴的行（默认开启，导出时也删除）</label>
+<p class="hint">过滤字幕条目外的说明、署名等文字；时间轴下的多行字幕正文会保留。切换后会重新导入当前文件。</p>
+<p id="fileInfo" role="status">尚未导入字幕。首次使用请先在设置中导入词典。</p>
+</section>
+<section class="card"><h2>2. 标注并导出</h2>
+<div class="toggles"><label><input id="hanja" type="checkbox" checked> 汉字词 / 混杂词：經濟(경제)</label><label><input id="loanword" type="checkbox" checked> 外来语：컴퓨터(computer)</label></div>
+<p class="hint">括号紧贴对应词干，助词和词尾留在原位；混杂词按部分标注，如 게임(game)機(기)。沿用设置中的本地词典、模型审核与手动聊天模式。未确定的词保留原文。</p>
+<div class="buttons"><button id="start" class="primary" disabled>开始标注</button><button id="cancel" disabled>停止</button><button id="download" disabled>下载标注 SRT</button></div>
+<progress id="progress" max="100" value="0" aria-label="字幕处理进度"></progress><p id="status" role="status" aria-live="polite">等待导入。</p>
+<div class="stats"><span>本地确定 <b id="localCount">0</b></span><span>待审核 <b id="pendingCount">0</b></span><span>模型解决 <b id="modelCount">0</b></span><span>未解决 <b id="unresolvedCount">0</b></span></div>
+</section>
+<section id="manual" class="card" hidden><h2>手动聊天审核 <span id="batchLabel"></span></h2><p>复制本批提示词给模型，再粘贴或导入模型返回的完整 JSON。等待无固定超时；保留本页面即可，校验通过后自动继续下一批。</p>
+<label>本批提示词<textarea id="prompt" rows="7" readonly></textarea></label><div class="buttons"><button id="copyPrompt">复制提示词</button><button id="exportPrompt">下载提示词 TXT</button><label class="answer-file">导入答案 JSON / TXT<input id="answerFile" type="file" accept=".json,.txt,application/json,text/plain"></label></div>
+<label>本批模型结果<textarea id="answer" rows="6" placeholder='{"results":[{"target_id":"…","choice_id":"…"}]}'></textarea></label><button id="submitAnswer" class="primary">校验并应用本批结果</button><p id="manualStatus" role="status"></p></section>
+<section class="card"><div class="preview-head"><h2>字幕预览</h2><label>预览前 <select id="previewLimit"><option value="30">30</option><option value="100">100</option><option value="0">全部</option></select> 条</label></div><div class="preview-grid"><div><h3>原字幕</h3><pre id="original">导入后显示原字幕。</pre></div><div><h3>标注结果</h3><pre id="output">标注结果将显示在这里。</pre></div></div><p class="hint">导出为 UTF-8 SRT。停止或出错后，可下载已经确认的部分结果。</p></section>
+<details class="card"><summary>运行日志</summary><pre id="logs"></pre></details>
+</main><script type="module" src="srt-page.js"></script></body></html>

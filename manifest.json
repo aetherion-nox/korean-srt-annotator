@@ -1,0 +1,49 @@
+{
+  "manifest_version": 3,
+  "name": "Korean SRT Hanja & Loanword Annotator",
+  "version": "1.0.24",
+  "description": "Annotate Korean and bilingual SRT subtitles with inline Hanja and loanword origins while preserving timestamps and other languages.",
+  "permissions": [
+    "activeTab",
+    "scripting",
+    "storage",
+    "contextMenus",
+    "offscreen",
+    "unlimitedStorage",
+    "clipboardWrite"
+  ],
+  "optional_host_permissions": [
+    "https://*/*",
+    "http://localhost/*",
+    "http://127.0.0.1/*"
+  ],
+  "background": {
+    "service_worker": "service-worker.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "韩语 SRT 字幕标注",
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png"
+    }
+  },
+  "options_page": "options.html",
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "minimum_chrome_version": "116",
+  "content_security_policy": {
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'",
+    "sandbox": "sandbox allow-scripts; script-src 'self' 'unsafe-eval' blob:; worker-src blob:; child-src blob:; connect-src blob:;"
+  },
+  "sandbox": {
+    "pages": [
+      "kiwi-sandbox.html"
+    ]
+  }
+}
