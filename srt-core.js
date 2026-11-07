@@ -1,4 +1,5 @@
 import {projectAnnotation} from './local-engine.js';
+import {splitText} from './text-chunks.js';
 
 const HANGUL=/[가-힣ㄱ-ㅎㅏ-ㅣ]/u;
 const KOREAN_RUN=/[가-힣ㄱ-ㅎㅏ-ㅣ0-9]+(?:[ \t.,!?…，。！？、:;'"“”‘’·\-–—~〜]*[가-힣ㄱ-ㅎㅏ-ㅣ0-9]+)*/gu;
@@ -61,15 +62,12 @@ export function parseSrt(source,{filterUntimedLines=true}={}){
   const ms=offset=>((Number(time[offset])*60+Number(time[offset+1]))*60+Number(time[offset+2]))*1000+Number(time[offset+3]);
   if(ms(5)<ms(1))throw Error(`第 ${index} 条字幕的结束时间早于开始时间。`);
   const cue={index,time:block[1].text,lineCount:Math.max(0,block.length-2)};cues.push(cue);
+  const runs=[];
   for(const line of block.slice(2)){
    const add=(start,end)=>{
     const text=line.text.slice(start,end);
     for(const match of text.matchAll(KOREAN_RUN)){
-     // Keep sentences below the existing engine's 20,000 UTF-16 unit limit.
-     for(let at=0;at<match[0].length;at+=20000){
-      const part=match[0].slice(at,at+20000);
-      if(HANGUL.test(part))sentences.push({id:`srt-${sentences.length}`,text:part,start:line.start+start+match.index+at,cueIndex:cues.length-1});
-     }
+     if(HANGUL.test(match[0]))runs.push({start:line.start+start+match.index,end:line.start+start+match.index+match[0].length});
     }
    };
    const protectedRanges=[...line.text.matchAll(PROTECTED)].map(m=>({start:m.index,end:m.index+m[0].length}));
@@ -82,6 +80,17 @@ export function parseSrt(source,{filterUntimedLines=true}={}){
    let at=0;
    for(const range of protectedRanges.sort((a,b)=>a.start-b.start)){if(range.start>at)add(at,range.start);at=Math.max(at,range.end);}
    add(at,line.text.length);
+  }
+  // Join only contiguous Korean dialogue within this cue. Keep the exact source
+  // (including CRLF/indentation), so results still map straight back to SRT.
+  const merged=[];
+  for(const run of runs){
+   const previous=merged.at(-1),gap=previous?source.slice(previous.end,run.start):'';
+   if(previous&&/^[\s.,!?…，。！？、:;'"“”‘’·\-–—~〜]*$/u.test(gap))previous.end=run.end;
+   else merged.push({...run});
+  }
+  for(const run of merged)for(const chunk of splitText(source.slice(run.start,run.end))){
+   if(HANGUL.test(chunk.text))sentences.push({id:`srt-${sentences.length}`,text:chunk.text,start:run.start+chunk.start,cueIndex:cues.length-1,...(chunk.adjacentContext?{adjacentContext:chunk.adjacentContext}:{})});
   }
   block=[];
  };

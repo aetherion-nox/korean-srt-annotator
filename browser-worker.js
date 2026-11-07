@@ -22,11 +22,12 @@ async function initialize(){
   await python.runPythonAsync("import sys\nsys.path.insert(0, '/project/browser-support')\nimport browser_bridge\nfrom js import kiwiTokens\nbrowser_bridge.configure(kiwiTokens, '/project', '/data/hanja_dict.db')");
  })().catch(error=>{initialization=null;throw error;});return initialization;
 }
-async function dispatch(request){
+async function dispatch(request,progress=()=>{}){
+ if(!initialization)progress({stage:'dictionary'});
  await initialize();
- suppliedTokens=request.action==='analyze'&&Array.isArray(request.kiwiTokens)?{text:request.text,tokens:request.kiwiTokens}:null;
- if(request.action==='analyze'&&!suppliedTokens)await initializeKiwi();
- if(request.database&&!python.FS.analyzePath('/data/hanja_dict.db').exists){python.FS.writeFile('/data/hanja_dict.db',new Uint8Array(request.database));await python.runPythonAsync("await browser_bridge.initialize()");}
+ suppliedTokens=['analyze','warmup'].includes(request.action)&&Array.isArray(request.kiwiTokens)?{text:request.text,tokens:request.kiwiTokens}:null;
+ if(['analyze','warmup'].includes(request.action)){if(!suppliedTokens){if(!kiwiInitialization)progress({stage:'tokenizer'});await initializeKiwi();}if(request.action==='analyze')progress({stage:'analysis'});}
+ if(request.database&&!python.FS.analyzePath('/data/hanja_dict.db').exists){python.FS.writeFile('/data/hanja_dict.db',new Uint8Array(request.database));}
  let payload={...request};delete payload.database;delete payload.kiwiTokens;
  if(request.action==='import-db'){python.FS.writeFile('/data/candidate.db',new Uint8Array(request.bytes));payload={action:'import-db',path:'/data/candidate.db'};}
  if(request.action==='import'){python.FS.writeFile('/data/dictionary.zip',new Uint8Array(request.bytes));payload={action:'import',zip_path:'/data/dictionary.zip'};}
@@ -36,4 +37,4 @@ async function dispatch(request){
  if(['import','import-db'].includes(request.action))result.database=python.FS.readFile('/data/hanja_dict.db').buffer;
  if(request.action==='status')result.dictionary_loaded=result.ready;return result;
 }
-let queue=Promise.resolve();self.onmessage=({data})=>{queue=queue.then(async()=>{try{const result=await dispatch(data.request);self.postMessage({id:data.id,ok:true,result},result.database?[result.database]:[]);}catch(error){self.postMessage({id:data.id,ok:false,error:String(error.stack||error)});}});};
+let queue=Promise.resolve();self.onmessage=({data})=>{queue=queue.then(async()=>{try{const result=await dispatch(data.request,progress=>self.postMessage({id:data.id,progress}));self.postMessage({id:data.id,ok:true,result},result.database?[result.database]:[]);}catch(error){self.postMessage({id:data.id,ok:false,error:String(error.stack||error)});}});};

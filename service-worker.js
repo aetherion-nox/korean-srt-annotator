@@ -1,3 +1,4 @@
+import {createEnginePreloader} from './engine-preload.js';
 import {menuAction} from './context-menu-state.js';
 import {callBrowserEngine,copyTextToClipboard} from './browser-engine-host.js';
 import {configureBrowserEngineHost} from './browser-engine.js';
@@ -9,19 +10,25 @@ import {requestLogger} from './request-log.js';
 import {runSentencePipeline,CACHE_KEY} from './annotation-pipeline.js';
 import {prepareCacheSession} from './session-cache.js';
 import {createManualReviewSession} from './manual-review.js';
-const CONTENT_SCRIPT_VERSION='1.0.24';
+const CONTENT_SCRIPT_VERSION='1.0.32';
 const UNDO_LAST_MENU_ID='kra-undo-last';
 const STREAM_PORT_NAME='KRA_ANNOTATE_STREAM_V1';
 const cache=new Map();
 let cacheLoaded=false;
 let cacheLoadPromise;
+const enginePreloader=createEnginePreloader();
+const preloadEngine=()=>enginePreloader.run().catch(error=>console.warn('[KRA preload]',error.message));
+// Also covers extension reload/enabling and browsers that resume the worker.
+preloadEngine();
 initializeStorageAccess().then(migrateLegacyApiKeyStorage).catch(console.error);
 chrome.runtime.onInstalled.addListener(() => {
+  preloadEngine();
   initializeStorageAccess().then(migrateLegacyApiKeyStorage).catch(console.error);
 
 
 });
 chrome.runtime.onStartup.addListener(() => {
+  preloadEngine();
   loadCache().catch(console.error);
   initializeStorageAccess().then(migrateLegacyApiKeyStorage).catch(console.error);
 
@@ -41,12 +48,17 @@ chrome.contextMenus.onClicked.addListener((info,tab)=>{
 // Local storage is restricted to trusted contexts. Forward the display switch
 // from the background so already-open pages receive it without reading logs/keys.
 chrome.storage.onChanged.addListener((changes,area)=>{
+ if(area==='local'&&changes.preloadEngineOnStartup&&changes.preloadEngineOnStartup.newValue!==false)preloadEngine();
  if(area!=='local'||(!changes.progressiveAnnotation&&!changes.uiSettings))return;
  const uiSettings={...(changes.uiSettings?sanitizeUiSettings(changes.uiSettings.newValue):{}),...(changes.progressiveAnnotation?{progressiveAnnotation:changes.progressiveAnnotation.newValue===true}:{})};
  chrome.tabs.query({}).then(tabs=>Promise.allSettled(tabs.filter(tab=>Number.isInteger(tab.id)).map(tab=>chrome.tabs.sendMessage(tab.id,{type:'APPLY_UI_SETTINGS',uiSettings})))).catch(()=>{});
 });
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if(message?.type==='KRA_PRELOAD_ENGINE'){
+    if(sender.id!==chrome.runtime.id){sendResponse({ok:false,error:'Invalid extension sender'});return;}
+    preloadEngine().then(()=>sendResponse({ok:true}));return true;
+  }
   if(message?.type==='KRA_COPY_TEXT'){
     if(sender.id!==chrome.runtime.id){sendResponse({ok:false,error:'Invalid extension sender'});return;}
     copyTextToClipboard(message.text).then(sendResponse).catch(error=>sendResponse({ok:false,error:error.message}));return true;
@@ -434,7 +446,7 @@ async function loadCache(){
 async function runModern(message,post,signal,manualSession){
  await loadCache();const config=await engineConfig();
  if(config.manualModelReview&&!manualSession)throw Error('手动聊天审核需要网页输入框，请从网页标注入口启动。');
- const modelConfig=async()=>({...(config.manualModelReview?{provider:'manual',model:'manual-chat',endpoint:'manual://chat',manualReview:true,request:manualSession.request}:await getApiConfig()),batchContextTier:config.batchContextTier});
+ const modelConfig=async()=>({...(config.manualModelReview?{provider:'manual',model:'manual-chat',endpoint:'manual://chat',manualReview:true,request:manualSession.request}:await getApiConfig()),batchContextTier:config.batchContextTier,reviewPosFilter:config.reviewPosFilter});
  return runSentencePipeline({...message,nameProtection:typeof message.nameProtection==='boolean'?message.nameProtection:config.nameProtection,reviewAllCandidates:config.reviewAllCandidates},post,{signal,enabled:config.enableModelReview,modelConfig,cache,persist:async map=>chrome.storage.local.set({[CACHE_KEY]:Array.from(map)})});
 }
 function legacyPlan(message){

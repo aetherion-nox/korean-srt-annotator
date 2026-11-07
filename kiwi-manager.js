@@ -54,10 +54,10 @@ export function createKiwiManager({store=storage,bundled=async()=>{const r=await
   finally{candidateClient?.close();if(key&&!activated)await store('delete',key).catch(()=>{});busy=false;}
  }
  async function restore(){idle();const state=await read();await store('put',STATE,{...state,previous:state.active||state.previous,active:null,lastError:''});close();await report('已恢复内置 Kiwi 引擎。');return status();}
- async function tokenize(text){
+ async function tokenize(text,onInitialize){
   const state=await read();if(!state.active)return null;
   try{
-   if(runtime?.key!==state.active.key){close();const saved=await store('get',state.active.key);if(!saved)throw Error('已下载的引擎文件丢失');const client=sandbox();runtime={key:state.active.key,client};await client.load(saved);}
+   if(runtime?.key!==state.active.key){onInitialize?.();close();const saved=await store('get',state.active.key);if(!saved)throw Error('已下载的引擎文件丢失');const client=sandbox();runtime={key:state.active.key,client};await client.load(saved);}
    return validTokens(text,await runtime.client.tokenize(text));
   }catch(error){
    close();await store('put',STATE,{...state,active:null,previous:state.active,lastError:'新版 Kiwi 运行失败，已恢复内置版：'+String(error.message||error)});
