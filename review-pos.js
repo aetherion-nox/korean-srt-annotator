@@ -97,7 +97,7 @@ function compatible(tags,pos){
  return classes.includes(null)?null:false;
 }
 export function filterReviewTarget(target,config={}){
- if(config.reviewPosFilter===false)return target;
+ if(config.reviewPosFilter===false||target.dictionary_name_homograph===true||target.suspected_person_name===true)return target;
  const tags=occurrenceTags(target);
  if(!tags)return target;
  const original=target.options.filter(option=>option.type!=='keep');
@@ -109,3 +109,15 @@ export function filterReviewTarget(target,config={}){
  return {...target,options:[...keep,...allowed]};
 }
 export function filterReviewTargets(targets,config={}){return targets.map(target=>filterReviewTarget(target,config));}
+
+// Only trim Kiwi POS labels when local compatibility checks are conclusive.
+export function canTrimReviewMorphology(target,config={}){
+ if(config.reviewPosFilter===false||target.pos_conflict===true||target.partial_word===true||target.dictionary_name_homograph===true||target.suspected_person_name===true)return false;
+ const tags=occurrenceTags(target);
+ if(!tags)return false;
+ const choices=target.options.filter(option=>option.type!=='keep');
+ return choices.length>0&&choices.every(option=>{
+  const ownTags=optionTags(target,option,tags);
+  return !!ownTags&&compatible(ownTags,option.part_of_speech)===true;
+ });
+}
