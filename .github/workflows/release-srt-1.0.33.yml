@@ -17,8 +17,8 @@ jobs:
       - name: Test code
         run: |
           node --test tests/review-pos.test.mjs tests/name-homograph-payload.test.mjs
-          python3 tests/test_name_ambiguity.py
-          python3 tests/test_dictionary_names.py
+          PYTHONPATH=python/browser-support python3 tests/test_name_ambiguity.py
+          PYTHONPATH=python/browser-support python3 tests/test_dictionary_names.py
       - name: Restore runtime
         run: python3 restore_distribution.py
       - name: Refresh Pyodide Python source bundle and build ZIP
