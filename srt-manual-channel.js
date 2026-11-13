@@ -1,5 +1,6 @@
 import {runSentencePipeline} from './annotation-pipeline.js';
 import {createManualReviewSession} from './manual-review.js';
+import {engineStatus,analyzeLocal} from './local-engine.js';
 
 // Human-paced review belongs to the visible workspace. The background is used
 // only for short dictionary requests, so its suspension cannot expire a batch.
@@ -22,10 +23,13 @@ export function createSrtManualChannel(settings){
    if(started||message.type!=='START')return;
    started=true;operationId=message.operationId;
    session=createManualReviewSession({operationId,post,signal:controller.signal});
-   runSentencePipeline({...message,nameProtection:settings.nameProtection,reviewAllCandidates:settings.reviewAllCandidates},post,{
+   const allowNoDictionary=settings.enableModelReview&&((settings.experimentalHanja===true&&message.modes?.hanja===true)||(settings.experimentalLoanword===true&&message.modes?.loanword===true));
+   runSentencePipeline({...message,nameProtection:settings.nameProtection,filterDictionaryPeople:settings.filterDictionaryPeople,reviewAllCandidates:settings.reviewAllCandidates,smartSegmentation:settings.smartSegmentation,reviewLocalConversions:settings.enableModelReview&&settings.reviewLocalConversions},post,{
     signal:controller.signal,
     enabled:settings.enableModelReview,
-    modelConfig:async()=>({provider:'manual',model:'manual-chat',endpoint:'manual://chat',manualReview:true,request:session.request,batchContextTier:settings.batchContextTier})
+    status:(signal,progress)=>engineStatus(signal,progress,{allowNoDictionary}),
+    analyze:(text,modes,signal,progress)=>analyzeLocal(text,{...modes,allowNoDictionary},signal,progress),
+    modelConfig:async()=>({provider:'manual',model:'manual-chat',endpoint:'manual://chat',manualReview:true,request:session.request,batchContextTier:settings.batchContextTier,manualOutputTokenLimit:settings.manualOutputTokenLimit,apiOutputTokenLimit:settings.apiOutputTokenLimit,reviewPosFilter:settings.reviewPosFilter,experimentalHanja:settings.experimentalHanja,experimentalLoanword:settings.experimentalLoanword,hanjaReadingCheck:settings.hanjaReadingCheck,smartSegmentation:settings.smartSegmentation})
    }).catch(error=>{if(!controller.signal.aborted)post({type:'ERROR',operationId,error:error.message});});
   }
  };

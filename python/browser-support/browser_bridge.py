@@ -147,6 +147,9 @@ async def request(raw):
     elif action == 'warmup':
         await _get_engine(database)
         result = {'ready':True,'preloaded':True}
+    elif action == 'warmup':
+        await _get_engine(database)
+        result = {'ready':True,'preloaded':True}
     elif action == 'analyze':
         result = await analyze(message['text'],message.get('modes',{}),database)
     elif action == 'import-db':

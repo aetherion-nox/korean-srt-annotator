@@ -46,7 +46,7 @@ $('start').addEventListener('click',async()=>{
   report('正在启动词典引擎…');
   const [{progressiveAnnotation=false},settings]=await Promise.all([chrome.storage.local.get('progressiveAnnotation'),engineConfig()]);
   const parsedFingerprint=await fingerprintSrt(documentState.source);
-  log('运行依据 '+JSON.stringify({input_sha256:inputFingerprint,parsed_sha256:parsedFingerprint,extension_version:chrome.runtime.getManifest().version,modes,nameProtection:settings.nameProtection,reviewAllCandidates:settings.reviewAllCandidates,manualModelReview:settings.manualModelReview,batchContextTier:settings.batchContextTier,filterUntimedLines:$('filterUntimedLines').checked}));
+  log('运行依据 '+JSON.stringify({input_sha256:inputFingerprint,parsed_sha256:parsedFingerprint,extension_version:chrome.runtime.getManifest().version,modes,nameProtection:settings.nameProtection,reviewAllCandidates:settings.reviewAllCandidates,manualModelReview:settings.manualModelReview,batchContextTier:settings.batchContextTier,smartSegmentation:settings.smartSegmentation,experimentalHanja:settings.experimentalHanja,experimentalLoanword:settings.experimentalLoanword,hanjaReadingCheck:settings.hanjaReadingCheck,filterUntimedLines:$('filterUntimedLines').checked}));
   const sentences=documentState.sentences;
   if(generation!==runGeneration)return;
   // Bound the existing pipeline operation; review batching still follows its saved tier.
@@ -84,12 +84,21 @@ function runBatch(sentences,modes,progressiveAnnotation,offset,total,settings){
      manualRequest=event;$('batchLabel').textContent=`第 ${event.batchNumber} / ${event.batchTotal||'?'} 批 · ${event.targetCount} 个词`;
      $('prompt').value=event.text;$('answer').value='';$('answerFile').value='';$('manualStatus').textContent='等待本批结果（无等待超时）；请保留本页面。';$('submitAnswer').disabled=false;$('manual').hidden=false;
      report('等待手动聊天审核（无等待超时）；保留本页面，导入结果后继续。');
-    }else if(event.type==='MANUAL_REVIEW_ERROR'){$('manualStatus').textContent=event.error;$('submitAnswer').disabled=false;}
+    }else if(event.type==='MANUAL_REVIEW_ERROR'){
+     $('manualStatus').textContent=event.error;
+     // Keep already validated answers server-side; show only missing/invalid IDs.
+     if(typeof event.repairPrompt==='string'&&event.repairPrompt){
+      $('prompt').value=event.repairPrompt;
+      $('answer').value='';$('answerFile').value='';
+      log('手动审核已保留 '+(event.acceptedCount||0)+' 条已验证结果；补交 '+(event.invalidTargetIds?.length||0)+' 条。');
+     }
+     $('submitAnswer').disabled=false;
+    }
     else if(event.type==='MANUAL_REVIEW_ACCEPTED'){manualRequest=null;$('manual').hidden=true;report('本批校验通过，正在继续…');}
     else if(event.type==='DONE'){if(!progressiveAnnotation)refreshPreview();finish();}
    }catch(error){finish(error);}
   });
-  port.postMessage({type:'START',operationId,sentences,modes,nameProtection:settings.nameProtection,progressiveAnnotation,deepAnalysis:true});
+  port.postMessage({type:'START',operationId,sentences,modes,nameProtection:settings.nameProtection,smartSegmentation:settings.smartSegmentation,progressiveAnnotation,deepAnalysis:true});
  });
 }
 $('cancel').addEventListener('click',()=>{if(!running)return;++runGeneration;abortBatch?.();activePort=null;abortBatch=null;manualRequest=null;$('manual').hidden=true;mergeSrtResults(results,{type:'ROLLBACK_PREVIEWS'});refreshPreview();setBusy(false);report('已停止，可下载已经确认的部分结果。');});

@@ -1,6 +1,6 @@
 {
   "name": "korean-srt-annotator",
-  "version": "1.0.33",
+  "version": "1.0.34",
   "type": "module",
   "scripts": {
     "test": "python3 tests/test_quantity_bonus.py && python3 tests/test_dictionary_names.py && python3 tests/test_pos_coverage.py && python3 tests/test_analysis_performance.py && python3 tests/test_startup_stats.py && python3 tests/test_preload.py && node --test tests/*.test.mjs",

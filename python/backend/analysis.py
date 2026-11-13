@@ -4,7 +4,7 @@ import re
 from pathlib import Path
 from backend.bootstrap import ensure_environment
 from backend.offsets import to_utf16
-from backend.proper_nouns import proper_noun_ranges, overlaps_proper_noun, surname_name_evidence, dictionary_name_evidence
+from backend.proper_nouns import proper_noun_ranges, overlaps_proper_noun, surname_name_evidence, dictionary_name_evidence, is_dictionary_person
 from backend.name_homographs import homograph_target, surname_ambiguity_target
 from backend.loanwords import is_nonconversion_origin, nonconversion_options
 ensure_environment()
@@ -13,9 +13,8 @@ from app.services.tokenizer import TokenizerService
 from app.services.dictionary import DictionaryService
 from app.services.disambiguation import DisambiguationService
 from app.database import validate_database
-from app.services.usage import quantity_context
 
-ENGINE_VERSION = '34fd08a7d03706a21a2c2e1b00571f2d838cd508:kra-name-homograph-1.0.33'
+ENGINE_VERSION = '34fd08a7d03706a21a2c2e1b00571f2d838cd508:kra-name-homograph-1.1.55'
 DEFAULT_DB = Path(__file__).resolve().parent / 'hanja_dict.db'
 HANJA = re.compile(r'[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]')
 
@@ -95,25 +94,37 @@ class Engine:
     async def tokens(self,text):
         await self.initialize()
         return await self.tokenizer.tokenize_async(text)
-    async def lookup_entries(self,forms):
+    async def lookup_entries(self,forms,*,filter_people=False):
         await self.initialize()
         if self.dictionary is None: return {f:[] for f in forms}
         db=await self.dictionary.get_connection()
         try:
-            return {f:await self.dictionary.lookup_by_written_form(f,db) for f in dict.fromkeys(forms)}
+            entries=await self.dictionary.batch_lookup_entries(forms,db)
+            return {f:[r for r in records if not is_dictionary_person(r)] for f,records in entries.items()} if filter_people else entries
         finally:
             await db.close()
     async def analyze(self,text,modes):
         if len(text)>20000:raise ValueError('Text exceeds 20,000 characters')
         await self.initialize()
         review_all=bool(modes.get('reviewAll',False))
+        # Selective audit: review positive local conversions, but do NOT resurrect
+        # locally rejected/nonconversion senses or turn unchanged words into targets.
+        review_conversions=review_all or bool(modes.get('reviewLocalConversions',False))
+        filter_dictionary_people=modes.get('filterDictionaryPeople',False) is True
+        # Filter a working view, never mutate the imported dictionary or its
+        # globally cached candidate lists. Raw lookups still power name protection.
+        async def conversion_lookup(forms):
+            result=await self.lookup_fn(forms)
+            if not filter_dictionary_people:return result
+            return {form:[record for record in records if not is_dictionary_person(record)]
+                    for form,records in result.items()}
         # The original converter owns tokenization, lookup forms, scoring,
         # whole-word precedence and certainty. Do not rescan skipped compounds
         # for general conversion. Exact mixed/cross-origin words have a
         # complete whole-entry choice path below, before source projection.
         converter=ConverterService(self.tokenizer,self.disambiguation)
         tokens=await self.tokens(text)
-        segments,_=await converter.convert(text,self.lookup_fn,tokens=tokens)
+        segments,_=await converter.convert(text,conversion_lookup,tokens=tokens)
         dictionary_names,homograph_evidence=await dictionary_name_evidence(text,tokens,self.lookup_fn)
         proper_ranges=proper_noun_ranges(tokens)+dictionary_names
         name_protection=modes.get('nameProtection',True) is not False
@@ -122,23 +133,20 @@ class Engine:
         protected_dictionary_names=[(a,b) for a,b in dictionary_names if (a,b) not in conflicting_ranges]
         inferred_names,surname_ambiguities=await surname_name_evidence(text,tokens,self.lookup_fn) if name_protection else ([],[])
         protected_names=sorted(set(inferred_names+protected_dictionary_names)) if name_protection else []
-        # Never review a shorter name-like substring inside a protected full name.
         homograph_evidence=[item for item in homograph_evidence if not any(a<=item[0] and item[1]<=b for a,b in protected_names)]
-        surname_ambiguities=[item for item in surname_ambiguities if not any(
-            a<item[1] and item[0]<b for a,b in protected_names+dictionary_names)]
-        surname_ambiguities=[item for item in surname_ambiguities if not any(
-            a<item[1] and item[0]<b for a,b,_,_ in homograph_evidence)]
+        surname_ambiguities=[item for item in surname_ambiguities if not any(a<item[1] and item[0]<b for a,b in protected_names+dictionary_names)]
+        surname_ambiguities=[item for item in surname_ambiguities if not any(a<item[1] and item[0]<b for a,b,_,_ in homograph_evidence)]
         conflicting_ranges=[(a,b) for a,b,_,_ in homograph_evidence]
         suspect_ranges=[(a,b) for a,b,_,_ in surname_ambiguities]
-        homograph_targets=[homograph_target(text,a,b,word,records,modes) for a,b,word,records in homograph_evidence]
-        suspect_targets=[surname_ambiguity_target(text,a,b,word,records,modes) for a,b,word,records in surname_ambiguities]
+        homograph_targets=[homograph_target(text,a,b,word,[r for r in records if not filter_dictionary_people or not is_dictionary_person(r)],modes) for a,b,word,records in homograph_evidence]
+        suspect_targets=[surname_ambiguity_target(text,a,b,word,[r for r in records if not filter_dictionary_people or not is_dictionary_person(r)],modes) for a,b,word,records in surname_ambiguities]
         blocked_for_local=protected_names+conflicting_ranges+suspect_ranges
         upstream_counts={f'upstream_{status}':sum(s.status==status for s in segments) for status in ('converted','ambiguous','no_match','kept')}
         mixed=dict(annotations=[],targets=[],ranges=[],skipped_mixed=0)
         if self.dictionary is not None and (modes.get('hanja',True) or modes.get('loanword',False)):
             from backend.mixed_origins import collect_mixed
             whole_word_ranges=[(s.start,s.end) for s in segments if s.selection_reason in ('whole_word_match','whole_word_keep_competition')]
-            mixed=await collect_mixed(self,text,tokens,modes,whole_word_ranges=whole_word_ranges,blocked_ranges=blocked_for_local,review_ranges=dictionary_names)
+            mixed=await collect_mixed(self,text,tokens,{**modes,'reviewAll':review_conversions},whole_word_ranges=whole_word_ranges,blocked_ranges=blocked_for_local,review_ranges=dictionary_names)
         annotations=list(mixed['annotations']); reviews=[]; occupied=list(mixed['ranges']); rejected=0
         def valid(start,end,surface):return isinstance(start,int) and isinstance(end,int) and 0<=start<end<=len(text) and text[start:end]==surface
         for s in segments:
@@ -146,7 +154,7 @@ class Engine:
             if s.status not in ('converted','ambiguous'):continue
             if any(s.start<b and a<s.end for a,b in mixed['ranges']):continue
             if not valid(s.start,s.end,s.original):rejected+=1;continue
-            if s.status=='converted' and not review_all and not overlaps_proper_noun(s.start,s.end,proper_ranges):
+            if s.status=='converted' and not review_conversions and not overlaps_proper_noun(s.start,s.end,proper_ranges):
                 if not safe_replacement(s.display_text) or any(s.start<b and a<s.end for a,b in occupied):rejected+=1;continue
                 occupied.append((s.start,s.end))
                 token=next((t for t in tokens if t.start==s.start and t.start+t.length==s.end),None)
@@ -162,7 +170,7 @@ class Engine:
             if any(start<b and a<end for a,b in occupied):continue
             for c in candidates:
                 replacement=c.get('replacement')
-                if (not review_all and not overlaps_proper_noun(start,end,proper_ranges) and not c.get('is_reliable')) or not safe_replacement(replacement):continue
+                if (not review_conversions and not overlaps_proper_noun(start,end,proper_ranges) and not c.get('is_reliable')) or not safe_replacement(replacement):continue
                 # Preserve inflected Korean suffixes using unchanged upstream display builder.
                 token=next((t for t in review_tokens if t.start==start and t.start+t.length==end),None)
                 if token is not None:
@@ -204,10 +212,10 @@ class Engine:
         skipped_mixed=0
         if modes.get('loanword',False):
             from backend.loanwords import collect, merge_targets
-            entries=await self.lookup_entries([t.form for t in tokens])
+            entries=await self.lookup_entries([t.form for t in tokens],filter_people=filter_dictionary_people)
             # Whole-entry owned words already contain all sibling origins in every mode.
             # Disabled Hanja annotations must not block ordinary loanword lookup.
-            loan=collect(text,tokens,entries,(occupied if modes.get('hanja',True) else mixed['ranges'])+blocked_for_local,force_review=review_all,hanja_enabled=modes.get('hanja',True),review_ranges=dictionary_names)
+            loan=collect(text,tokens,entries,(occupied if modes.get('hanja',True) else mixed['ranges'])+blocked_for_local,force_review=review_conversions,hanja_enabled=modes.get('hanja',True),review_ranges=dictionary_names)
             skipped_mixed=loan['skipped_mixed']
             # A locally certain loan overlapping an original Hanja review becomes
             # a fixed review option instead of pre-empting that connected region.
@@ -221,12 +229,17 @@ class Engine:
         # Complete every candidate, including sibling origins owned by mixed words.
         option_definitions=await self.dictionary.get_definitions_for_entries([o['entry_id'] for t in targets for o in t['options'] if o['type']!='keep']) if self.dictionary is not None else {}
         option_metadata=await self.dictionary.get_metadata_for_entries(option_definitions) if self.dictionary is not None else {}
+        filtered_person_only=set()
         for target in targets:
             native=[];conversions=[];seen=set()
+            removed_person_sense=False
             for option in target['options']:
                 if option['type']=='keep':continue
                 option={**option,**option_metadata.get(option['entry_id'],{})}
                 definitions=option_definitions.get(option['entry_id'],option['definitions'])
+                if filter_dictionary_people and is_dictionary_person({**option,'definitions':definitions}):
+                    removed_person_sense=True
+                    continue
                 if option['type']=='nonconversion':
                     for definition in definitions:
                         key=(option['entry_id'],definition)
@@ -235,6 +248,12 @@ class Engine:
                         native.append({**option,'choice_id':f'n{len(native)}','definitions':[definition]})
                 else:conversions.append({**option,'choice_id':f'c{len(conversions)}','definitions':definitions})
             target['options']=[dict(choice_id='KEEP',type='keep',replacement=target['surface'],entry_id=None,definitions=[])]+native+conversions
+            if removed_person_sense and not native and not conversions:
+                filtered_person_only.add(id(target))
+        # Do not send person-only remnants (KEEP with no lexical sense) to the
+        # model, which could otherwise invent an experimental origin for a name.
+        if filtered_person_only:
+            targets=[target for target in targets if id(target) not in filtered_person_only]
         # Encode each token boundary once, not once per review target.
         # This retains the existing surrogate/astral offset conversion exactly.
         token_morphology=[dict(form=t.form,tag=t.tag,start=to_utf16(text,t.start),end=to_utf16(text,t.start+t.length)) for t in tokens]
@@ -246,16 +265,21 @@ class Engine:
             target['target_id']=f't{i}'
             a=target['start'];b=target['end']
             target['morphology']=[dict(m) for m in token_morphology if m['start']<b and a<m['end']]
-            near=[i for i,m in enumerate(token_morphology) if m['start']<b and a<m['end']]
-            if near:
-                target['context_morphology']=[dict(m) for m in token_morphology[max(0,near[0]-2):near[-1]+3]]
-                first=tokens[near[0]];last=tokens[near[-1]]
-                quantity=quantity_context(text,tokens,first.start,last.start+last.length)
-                if quantity:target['quantity_context']={**quantity,'start':to_utf16(text,quantity['start']),'end':to_utf16(text,quantity['end'])}
             target['partial_word']=a in nominal_ends or b in nominal_starts
             if overlaps_proper_noun(target['start'],target['end'],proper_utf16):target['proper_noun']=True
             if overlaps_proper_noun(target['start'],target['end'],dictionary_name_utf16):target['dictionary_person_name']=True
-        return dict(engine_version=ENGINE_VERSION,dictionary_fingerprint=self.fingerprint,annotations=annotations,targets=targets,stats=dict(local_determined=len(annotations),pending=len(targets),protected_names=len(protected_names),structural_rejections=rejected,skipped_mixed=skipped_mixed+mixed['skipped_mixed'],**upstream_counts))
+        # Expose Kiwi's actual proposal and conservative name/proper-noun
+        # boundaries only for optional single-pass LLM segmentation auditing.
+        # All offsets are converted once to JavaScript UTF-16 coordinates.
+        # No second tokenization/lookup run, no new dictionary dependencies.
+        repair_context={}
+        if modes.get('smartSegmentation',False):
+            guarded=proper_ranges+(protected_names if name_protection else [])+suspect_ranges+conflicting_ranges
+            protected=sorted(set((to_utf16(text,a),to_utf16(text,b)) for a,b in guarded if 0<=a<b<=len(text)))
+            repair_context={'repair_context':{
+                'kiwi_tokens':token_morphology,
+                'protected_ranges':[list(item) for item in protected]}}
+        return dict(engine_version=ENGINE_VERSION,dictionary_fingerprint=self.fingerprint,annotations=annotations,targets=targets,**repair_context,stats=dict(local_determined=len(annotations),pending=len(targets),protected_names=len(protected_names),structural_rejections=rejected,skipped_mixed=skipped_mixed+mixed['skipped_mixed'],**upstream_counts))
 
 _default_engine=None
 async def analyze(text: str,modes: dict) -> dict:
