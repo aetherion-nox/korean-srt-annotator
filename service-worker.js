@@ -4,7 +4,7 @@ import {callBrowserEngine,copyTextToClipboard} from './browser-engine-host.js';
 import {configureBrowserEngineHost} from './browser-engine.js';
 configureBrowserEngineHost(callBrowserEngine);
 import './api-profiles.js';
-import {engineConfig,engineStatus} from './local-engine.js';
+import {engineConfig,engineStatus,analyzeLocal} from './local-engine.js';
 import {reviewTargets} from './choice-review.js';
 import {requestLogger} from './request-log.js';
 import {runSentencePipeline,CACHE_KEY} from './annotation-pipeline.js';
@@ -446,8 +446,11 @@ async function loadCache(){
 async function runModern(message,post,signal,manualSession){
  await loadCache();const config=await engineConfig();
  if(config.manualModelReview&&!manualSession)throw Error('手动聊天审核需要网页输入框，请从网页标注入口启动。');
- const modelConfig=async()=>({...(config.manualModelReview?{provider:'manual',model:'manual-chat',endpoint:'manual://chat',manualReview:true,request:manualSession.request}:await getApiConfig()),batchContextTier:config.batchContextTier,reviewPosFilter:config.reviewPosFilter});
- return runSentencePipeline({...message,nameProtection:typeof message.nameProtection==='boolean'?message.nameProtection:config.nameProtection,reviewAllCandidates:config.reviewAllCandidates},post,{signal,enabled:config.enableModelReview,modelConfig,cache,persist:async map=>chrome.storage.local.set({[CACHE_KEY]:Array.from(map)})});
+ const modelConfig=async()=>({...(config.manualModelReview?{provider:'manual',model:'manual-chat',endpoint:'manual://chat',manualReview:true,request:manualSession.request}:await getApiConfig()),batchContextTier:config.batchContextTier,manualOutputTokenLimit:config.manualOutputTokenLimit,apiOutputTokenLimit:config.apiOutputTokenLimit,reviewPosFilter:config.reviewPosFilter,experimentalHanja:config.experimentalHanja,experimentalLoanword:config.experimentalLoanword,hanjaReadingCheck:config.hanjaReadingCheck,smartSegmentation:config.smartSegmentation});
+ const allowNoDictionary=config.enableModelReview&&((config.experimentalHanja===true&&message.modes?.hanja===true)||(config.experimentalLoanword===true&&message.modes?.loanword===true));
+ const status=(signal,progress)=>engineStatus(signal,progress,{allowNoDictionary});
+ const analyze=(text,modes,signal,progress)=>analyzeLocal(text,{...modes,allowNoDictionary},signal,progress);
+ return runSentencePipeline({...message,nameProtection:typeof message.nameProtection==='boolean'?message.nameProtection:config.nameProtection,filterDictionaryPeople:config.filterDictionaryPeople,smartSegmentation:config.smartSegmentation,reviewAllCandidates:config.reviewAllCandidates,reviewLocalConversions:config.enableModelReview&&config.reviewLocalConversions},post,{signal,enabled:config.enableModelReview,modelConfig,status,analyze,cache,persist:async map=>chrome.storage.local.set({[CACHE_KEY]:Array.from(map)})});
 }
 function legacyPlan(message){
  const candidates=Array.isArray(message.candidates)?message.candidates:(message.batches||[]).flat();

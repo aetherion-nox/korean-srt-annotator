@@ -11,6 +11,7 @@
 </section>
 <section class="card"><h2>2. 标注并导出</h2>
 <div class="toggles"><label><input id="hanja" type="checkbox" checked> 汉字词 / 混杂词：經濟(경제)</label><label><input id="loanword" type="checkbox" checked> 外来语：컴퓨터(computer)</label></div>
+<p class="hint">可在设置中分别启用实验性词源与 LLM 智能分词修复，默认关闭；未通过校验的结果不写入字幕。</p>
 <p class="hint">括号紧贴对应词干，助词和词尾留在原位；混杂词按部分标注，如 게임(game)機(기)。沿用设置中的本地词典、模型审核与手动聊天模式。未确定的词保留原文。</p>
 <div class="buttons"><button id="start" class="primary" disabled>开始标注</button><button id="cancel" disabled>停止</button><button id="download" disabled>下载标注 SRT</button></div>
 <progress id="progress" max="100" value="0" aria-label="字幕处理进度"></progress><p id="status" role="status" aria-live="polite">等待导入。</p>

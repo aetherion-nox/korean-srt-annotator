@@ -46,7 +46,7 @@ $('start').addEventListener('click',async()=>{
   report('正在启动词典引擎…');
   const [{progressiveAnnotation=false},settings]=await Promise.all([chrome.storage.local.get('progressiveAnnotation'),engineConfig()]);
   const parsedFingerprint=await fingerprintSrt(documentState.source);
-  log('运行依据 '+JSON.stringify({input_sha256:inputFingerprint,parsed_sha256:parsedFingerprint,extension_version:chrome.runtime.getManifest().version,modes,nameProtection:settings.nameProtection,reviewAllCandidates:settings.reviewAllCandidates,manualModelReview:settings.manualModelReview,batchContextTier:settings.batchContextTier,filterUntimedLines:$('filterUntimedLines').checked}));
+  log('运行依据 '+JSON.stringify({input_sha256:inputFingerprint,parsed_sha256:parsedFingerprint,extension_version:chrome.runtime.getManifest().version,modes,nameProtection:settings.nameProtection,reviewAllCandidates:settings.reviewAllCandidates,manualModelReview:settings.manualModelReview,batchContextTier:settings.batchContextTier,smartSegmentation:settings.smartSegmentation,experimentalHanja:settings.experimentalHanja,experimentalLoanword:settings.experimentalLoanword,hanjaReadingCheck:settings.hanjaReadingCheck,filterUntimedLines:$('filterUntimedLines').checked}));
   const sentences=documentState.sentences;
   if(generation!==runGeneration)return;
   // Bound the existing pipeline operation; review batching still follows its saved tier.
@@ -89,7 +89,7 @@ function runBatch(sentences,modes,progressiveAnnotation,offset,total,settings){
     else if(event.type==='DONE'){if(!progressiveAnnotation)refreshPreview();finish();}
    }catch(error){finish(error);}
   });
-  port.postMessage({type:'START',operationId,sentences,modes,nameProtection:settings.nameProtection,progressiveAnnotation,deepAnalysis:true});
+  port.postMessage({type:'START',operationId,sentences,modes,nameProtection:settings.nameProtection,smartSegmentation:settings.smartSegmentation,progressiveAnnotation,deepAnalysis:true});
  });
 }
 $('cancel').addEventListener('click',()=>{if(!running)return;++runGeneration;abortBatch?.();activePort=null;abortBatch=null;manualRequest=null;$('manual').hidden=true;mergeSrtResults(results,{type:'ROLLBACK_PREVIEWS'});refreshPreview();setBusy(false);report('已停止，可下载已经确认的部分结果。');});
