@@ -1,0 +1,83 @@
+name: Verify and package SRT v1.0.35
+on:
+  push:
+    branches:
+      - feature/srt-v1.0.35-smart-segmentation-sync
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  test-and-package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Restore verified bundled Kiwi and Pyodide assets
+        run: python3 restore_distribution.py
+      - name: Embed current Python backend into restored Pyodide sources
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          base=Path.cwd()
+          path=base/'runtime/python-sources.json'
+          sources=json.loads(path.read_text(encoding='utf-8'))
+          for source in (base/'python').rglob('*.py'):
+              name='/project/'+source.relative_to(base/'python').as_posix()
+              sources[name]=source.read_text(encoding='utf-8')
+          path.write_text(json.dumps(sources,ensure_ascii=False,separators=(',',':')),encoding='utf-8')
+          required=['/project/backend/analysis.py','/project/backend/orthographic_aliases.py','/project/backend/spaced_phrases.py']
+          assert all(name in sources for name in required)
+          print('Embedded',len(sources),'Python source files')
+          PY
+      - name: Validate JavaScript syntax
+        run: |
+          find . -name '*.js' -not -path './runtime/*' -not -path './.github/*' -print0 | xargs -0 -n1 node --check
+      - name: Test SRT compatibility and review logic
+        run: |
+          node --test tests/*.test.mjs
+          PYTHONPATH=python/browser-support python3 tests/test_dictionary_names.py
+          PYTHONPATH=python/browser-support python3 tests/test_name_ambiguity.py
+          PYTHONPATH=python/browser-support python3 tests/test_pos_coverage.py
+      - name: Package installable ZIP (uncompressed Kiwi models)
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import json,subprocess,zipfile,hashlib
+          root=Path.cwd()
+          assert json.loads((root/'manifest.json').read_text())['version']=='1.0.35'
+          files=set(Path(x) for x in subprocess.check_output(['git','ls-files','-z']).decode().split('\0') if x)
+          files={p for p in files if p.parts[0]!='.github' and p.name not in {'restore_distribution.py'} and (root/p).is_file()}
+          for folder in ('runtime','icons'):
+              files.update(x.relative_to(root) for x in (root/folder).rglob('*') if x.is_file())
+          dest=root/'Korean-SRT-Annotator-v1.0.35.zip'
+          with zipfile.ZipFile(dest,'w') as z:
+              for p in sorted(files):
+                  method=zipfile.ZIP_STORED if p.suffix=='.mdl' else zipfile.ZIP_DEFLATED
+                  z.write(root/p,arcname='Korean-SRT-Annotator/'+p.as_posix(),compress_type=method,compresslevel=6 if method==zipfile.ZIP_DEFLATED else None)
+          with zipfile.ZipFile(dest) as z:
+              assert not z.testzip()
+              names=set(z.namelist())
+              assert 'Korean-SRT-Annotator/manifest.json' in names
+              assert 'Korean-SRT-Annotator/runtime/python-sources.json' in names
+              assert any(x.startswith('Korean-SRT-Annotator/runtime/models/') and x.endswith('.mdl') for x in names)
+          print('Package',dest.stat().st_size,'bytes; SHA-256',hashlib.sha256(dest.read_bytes()).hexdigest())
+          PY
+      - name: Attach installable extension package
+        uses: actions/upload-artifact@v4
+        with:
+          name: Korean-SRT-Annotator-v1.0.35
+          path: Korean-SRT-Annotator-v1.0.35.zip
+          if-no-files-found: error
+          retention-days: 30
+      - name: Publish complete v1.0.35 release ZIP
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view v1.0.35 >/dev/null 2>&1; then
+            gh release upload v1.0.35 Korean-SRT-Annotator-v1.0.35.zip --clobber
+          else
+            gh release create v1.0.35 Korean-SRT-Annotator-v1.0.35.zip --target "$GITHUB_SHA" --title "Korean SRT Annotator v1.0.35 — Web v1.1.56.7 compact results sync" --notes-file CHANGELOG-1.0.35.md --latest
+          fi

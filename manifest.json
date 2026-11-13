@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Korean SRT Hanja & Loanword Annotator",
-  "version": "1.0.34",
+  "version": "1.0.35",
   "description": "Annotate Korean and bilingual SRT subtitles with inline Hanja and loanword origins while preserving timestamps and other languages.",
   "permissions": [
     "activeTab",
