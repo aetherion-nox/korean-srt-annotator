@@ -84,7 +84,16 @@ function runBatch(sentences,modes,progressiveAnnotation,offset,total,settings){
      manualRequest=event;$('batchLabel').textContent=`第 ${event.batchNumber} / ${event.batchTotal||'?'} 批 · ${event.targetCount} 个词`;
      $('prompt').value=event.text;$('answer').value='';$('answerFile').value='';$('manualStatus').textContent='等待本批结果（无等待超时）；请保留本页面。';$('submitAnswer').disabled=false;$('manual').hidden=false;
      report('等待手动聊天审核（无等待超时）；保留本页面，导入结果后继续。');
-    }else if(event.type==='MANUAL_REVIEW_ERROR'){$('manualStatus').textContent=event.error;$('submitAnswer').disabled=false;}
+    }else if(event.type==='MANUAL_REVIEW_ERROR'){
+     $('manualStatus').textContent=event.error;
+     // Keep already validated answers server-side; show only missing/invalid IDs.
+     if(typeof event.repairPrompt==='string'&&event.repairPrompt){
+      $('prompt').value=event.repairPrompt;
+      $('answer').value='';$('answerFile').value='';
+      log('手动审核已保留 '+(event.acceptedCount||0)+' 条已验证结果；补交 '+(event.invalidTargetIds?.length||0)+' 条。');
+     }
+     $('submitAnswer').disabled=false;
+    }
     else if(event.type==='MANUAL_REVIEW_ACCEPTED'){manualRequest=null;$('manual').hidden=true;report('本批校验通过，正在继续…');}
     else if(event.type==='DONE'){if(!progressiveAnnotation)refreshPreview();finish();}
    }catch(error){finish(error);}
