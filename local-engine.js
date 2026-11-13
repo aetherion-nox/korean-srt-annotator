@@ -1,5 +1,5 @@
 import {browserEngineStatus,browserAnalyze} from './browser-engine.js';
-import {normalizeBatchContextTier} from './batch-budget.js';
+import {normalizeBatchContextTier,normalizeOutputTokenLimit} from './batch-budget.js';
 const CJK=/[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\u{20000}-\u{323af}]/u;
 export function projectAnnotation(text,annotation){
  const {start,end,surface,replacement,type}=annotation;
@@ -49,6 +49,10 @@ export function validateAnalysis(text,data){
   return [a.start,a.end];
  }).sort((a,b)=>a[0]-b[0]);
  if(sourceRanges.some((r,i)=>i&&r[0]<sourceRanges[i-1][1]))throw Error('Overlapping engine spans');
+  const dictionaryFree=data.dictionary_free===true;
+  if(dictionaryFree && (data.annotations.length||data.targets.some(t=>
+    !Array.isArray(t.options)||t.options.some(o=>o.type!=='keep'))))
+   throw Error('Dictionary-free engine cannot supply dictionary conversions or senses');
  const annotations=[],targets=[],diagnostics=Array.isArray(data.diagnostics)?data.diagnostics.filter(d=>d?.stage==='alignment'&&d.level==='warning'&&typeof d.message==='string'&&typeof d.detail==='string'):[];
  let rejectedAnnotations=0,rejectedTargets=0,rejectedOptions=0;
  const warn=(a,error,option=false)=>diagnostics.push({stage:'alignment',level:'warning',message:option?'已移除无法可靠对齐的汉字候选，保留其他候选；无可用候选时保留原文。':'已跳过无法可靠对齐的汉字词，保留原文并继续处理。',detail:JSON.stringify({surface:a.surface,replacement:a.replacement,start:a.start,end:a.end,entry_id:a.entry_id,source_characters:Array.from(a.surface).length,replacement_characters:Array.from(a.replacement).length,reason:error.message})});
@@ -84,15 +88,17 @@ export function validateAnalysis(text,data){
   if(!choices.has('KEEP'))throw Error('Missing KEEP');
   const convertible=validOptions.some(o=>['hanja','loanword','mixed'].includes(o.type));
   const nameOnlyReview=(t.suspected_person_name===true||t.dictionary_name_homograph===true)&&validOptions.some(o=>o.type==='nonconversion');
-  if(!convertible&&!nameOnlyReview){rejectedTargets++;continue;}
+   // Dictionary-free inputs have KEEP only; the model can propose allowed
+   // Hanja/Latin origins which are independently validated before application.
+   if(!convertible&&!nameOnlyReview&&!dictionaryFree){rejectedTargets++;continue;}
   targets.push({...t,options:validOptions});ranges.push([t.start,t.end]);
  }
  ranges.sort((a,b)=>a[0]-b[0]);if(ranges.some((r,i)=>i&&r[0]<ranges[i-1][1]))throw Error('Overlapping engine spans');
  return {...data,annotations,targets,diagnostics,stats:{...data.stats,local_determined:Math.max(0,Number(data.stats.local_determined||0)-rejectedAnnotations),pending:Math.max(0,Number(data.stats.pending||0)-rejectedTargets),structural_rejections:Number(data.stats.structural_rejections||0)+rejectedAnnotations+rejectedTargets,rejected_options:Number(data.stats.rejected_options||0)+rejectedOptions}};
 }
 export async function engineConfig(){
- const {enableModelReview=false,reviewAllCandidates=false,manualModelReview=false,batchContextTier,nameProtection=true,reviewPosFilter=true}=await chrome.storage.local.get(['enableModelReview','reviewAllCandidates','manualModelReview','batchContextTier','nameProtection','reviewPosFilter']);
- return {reviewPosFilter:reviewPosFilter!==false,nameProtection:nameProtection!==false,enableModelReview:enableModelReview===true||reviewAllCandidates===true||manualModelReview===true,reviewAllCandidates:reviewAllCandidates===true,manualModelReview:manualModelReview===true,batchContextTier:normalizeBatchContextTier(batchContextTier)};
+ const {enableModelReview=false,reviewAllCandidates=false,manualModelReview=false,experimentalHanja=false,experimentalLoanword=false,hanjaReadingCheck=true,smartSegmentation=false,reviewLocalConversions=true,batchContextTier,manualOutputTokenLimit,apiOutputTokenLimit,nameProtection=true,filterDictionaryPeople=true,reviewPosFilter=true}=await chrome.storage.local.get(['enableModelReview','reviewAllCandidates','manualModelReview','experimentalHanja','experimentalLoanword','hanjaReadingCheck','smartSegmentation','reviewLocalConversions','batchContextTier','manualOutputTokenLimit','apiOutputTokenLimit','nameProtection','filterDictionaryPeople','reviewPosFilter']);
+ return {reviewPosFilter:reviewPosFilter!==false,nameProtection:nameProtection!==false,filterDictionaryPeople:filterDictionaryPeople!==false,enableModelReview:enableModelReview===true||reviewAllCandidates===true||manualModelReview===true||experimentalHanja===true||experimentalLoanword===true||smartSegmentation===true,reviewAllCandidates:reviewAllCandidates===true,manualModelReview:manualModelReview===true,experimentalHanja:experimentalHanja===true,experimentalLoanword:experimentalLoanword===true,hanjaReadingCheck:hanjaReadingCheck!==false,smartSegmentation:smartSegmentation===true,reviewLocalConversions:reviewLocalConversions!==false,batchContextTier:normalizeBatchContextTier(batchContextTier),manualOutputTokenLimit:normalizeOutputTokenLimit(manualOutputTokenLimit,true),apiOutputTokenLimit:normalizeOutputTokenLimit(apiOutputTokenLimit,false)};
 }
 export const engineStatus=browserEngineStatus;
 export const analyzeLocal=browserAnalyze;
