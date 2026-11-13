@@ -7,7 +7,7 @@ on:
     branches: [main]
   workflow_dispatch:
 permissions:
-  contents: read
+  contents: write
 jobs:
   test-and-package:
     runs-on: ubuntu-latest
@@ -71,3 +71,13 @@ jobs:
           path: Korean-SRT-Annotator-v1.0.34.zip
           if-no-files-found: error
           retention-days: 30
+      - name: Publish complete v1.0.34 release ZIP
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view v1.0.34 >/dev/null 2>&1; then
+            gh release upload v1.0.34 Korean-SRT-Annotator-v1.0.34.zip --clobber
+          else
+            gh release create v1.0.34 Korean-SRT-Annotator-v1.0.34.zip --target "$GITHUB_SHA" --title "Korean SRT Annotator v1.0.34 — Web v1.1.55.4 smart segmentation sync" --notes-file CHANGELOG-1.0.34.md --latest
+          fi
