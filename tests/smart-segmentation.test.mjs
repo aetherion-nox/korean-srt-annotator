@@ -208,22 +208,22 @@ test('the feature toggle controls prompt and input without enabling ordinary exp
  assert.equal(off.sentences[0].kiwi_tokens,undefined);
  assert.deepEqual(on.sentences[0].kiwi_tokens,[]);
  assert.ok(!buildReviewInstructions({}).includes('repairs'));
- assert.ok(buildReviewInstructions({smartSegmentation:true}).includes('Actively audit EVERY original sentence'));
- assert.ok(buildReviewInstructions({smartSegmentation:true}).includes('You SHOULD submit repairs for EVERY genuine, well-supported'));
- assert.ok(buildReviewInstructions({smartSegmentation:true}).includes('Never invent repairs to reach a quota'));
- assert.ok(buildReviewInstructions({smartSegmentation:true}).includes('plus optional repairs'));
+ assert.ok(buildReviewInstructions({smartSegmentation:true}).includes('Audit every original sentence'));
+ assert.ok(buildReviewInstructions({smartSegmentation:true}).includes('If a genuine segmentation error is well supported'));
+ assert.ok(buildReviewInstructions({smartSegmentation:true}).includes('Do not add native-only or null repairs'));
+ assert.ok(buildReviewInstructions({smartSegmentation:true}).includes('Repair objects use'));
  assert.ok(!buildReviewInstructions({smartSegmentation:true}).includes('no explanations or extra fields'));
- assert.ok(!buildReviewInstructions({}).includes('Actively audit EVERY original sentence'));
+ assert.ok(!buildReviewInstructions({}).includes('Audit every original sentence'));
  assert.ok(!buildReviewInstructions({}).includes('you SHOULD write that origin'));
  assert.ok(!buildReviewInstructions({smartSegmentation:true}).includes('genuine Hanja spelling'));
  assert.ok(buildManualPrompt(text,[t],'batch',{smartSegmentation:true}).includes('repairs'));
  assert.ok(!buildManualPrompt(text,[t],'batch',{}).includes('repairs'));
  const combined=buildReviewInstructions({smartSegmentation:true,experimentalHanja:true,experimentalLoanword:true});
- assert.ok(combined.includes('Actively audit EVERY original sentence'));
- assert.ok(combined.includes('THIRD, if NO supplied dictionary option correctly represents'));
- assert.ok(combined.includes('DIRECTLY into results[].choice_id'));
- assert.equal((combined.match(/You SHOULD submit repairs/g)||[]).length,1);
- assert.equal((combined.match(/FIRST infer its meaning/g)||[]).length,1);
+ assert.ok(combined.includes('Audit every original sentence'));
+ assert.ok(combined.includes('When no supplied dictionary sense matches'));
+ assert.ok(combined.includes('directly in c'));
+ assert.equal((combined.match(/If a genuine segmentation error is well supported/g)||[]).length,1);
+ assert.equal((combined.match(/FIRST infer its contextual meaning/g)||[]).length,1);
 });
 
 test('manual mode returns normal target choices and repairs in a single response',async()=>{
@@ -232,7 +232,7 @@ test('manual mode returns normal target choices and repairs in a single response
  const f=fixture(text,[t]);
  const awaiting=session.request(f.config,[t]);
  const request=events.find(e=>e.type==='MANUAL_REVIEW_REQUEST');
- const message={batch_id:request.requestId,results:[{target_id:'t0',choice_id:'c0'}],
+ const message={batch_id:request.requestId,results:[{t:'t0',c:'c0'}],
   repairs:[row('s0','replace',['t0'],0,2,text,'game')]};
  assert.equal(session.submit({operationId:'manual-repair',requestId:request.requestId,text:JSON.stringify(message)}),true);
  const resolved=await awaiting;
@@ -250,7 +250,7 @@ test('pipeline uses exactly one model call and valid repair supersedes old dicti
   analyze:async(_text,modes)=>{assert.equal(modes.smartSegmentation,true);return {...identity,annotations:[],targets:[t],
     repair_context:{kiwi_tokens:[],protected_ranges:[]},stats:{pending:1}};},
   modelConfig:async()=>({smartSegmentation:true,batchContextTier:'32k',model:'fixture',endpoint:'fixture://model',
-   request:async(config,rows)=>{calls.push(rows);return {results:[{target_id:rows[0].target_id,choice_id:'c0'}],
+   request:async(config,rows)=>{calls.push(rows);return {results:[{t:rows[0].target_id,c:'c0'}],
     repairs:[row('s0','replace',[rows[0].target_id],0,2,text,'game')]};}})
  });
  assert.equal(calls.length,1);
@@ -269,7 +269,7 @@ test('pipeline can inspect a whole Hangul sentence even if local dictionary prod
   analyze:async()=>({...identity,annotations:[],targets:[],repair_context:{kiwi_tokens:[],protected_ranges:[]},stats:{pending:0}}),
   modelConfig:async()=>({smartSegmentation:true,model:'fixture',endpoint:'fixture://model',
    request:async(_,rows)=>{calls++;assert.equal(rows[0].scan_only,true);return {
-    results:[{target_id:rows[0].target_id,choice_id:'KEEP'}],
+    results:[{t:rows[0].target_id,c:null}],
     repairs:[row('s0','add',[],0,2,text,'game')]
    };}})
  });
@@ -286,7 +286,7 @@ test('invalid repair does not invalidate a normal choice or cause a second model
   enabled:true,cache:new Map(),status:async()=>identity,
   analyze:async()=>({...identity,targets:[t],annotations:[],repair_context:{kiwi_tokens:[],protected_ranges:[]},stats:{pending:1}}),
   modelConfig:async()=>({smartSegmentation:true,model:'fixture',endpoint:'fixture://model',
-   request:async(_,rows)=>{calls++;return {results:[{target_id:rows[0].target_id,choice_id:'c0'}],
+   request:async(_,rows)=>{calls++;return {results:[{t:rows[0].target_id,c:'c0'}],
      repairs:[row('s999','add',[],0,2,text,'學校')]};}})
  });
  assert.equal(calls,1);
@@ -298,7 +298,7 @@ test('invalid repair does not invalidate a normal choice or cause a second model
 test('streaming parser does not apply incomplete repair data as a visible annotation',()=>{
  const text='게임',t=target('t0',text,0,2),snapshots=[];
  const parser=choicePreviewParser([t],rows=>snapshots.push(rows.map(a=>a.option.choice_id)));
- const content='{"results":[{"target_id":"t0","choice_id":"KEEP"}],"repairs":[{"sentence_id":"s0"';
+ const content='{"results":[{"t":"t0","c":null}],"repairs":[{"sentence_id":"s0"';
  parser(content.slice(0,24));assert.equal(snapshots.length,0);
  parser(content.slice(24));
  assert.deepEqual(snapshots.at(-1),['KEEP']);

@@ -32,9 +32,9 @@ test('experimental prompt is opt-in and shares dictionary pools', () => {
  assert.doesNotMatch(basic,/repairs|actively check whether the dictionary/i);
  assert.match(buildReviewInstructions({smartSegmentation:true}),/repairs/);
  const payload=buildReviewPayload('경제',[target],{});
- assert.equal(payload.payload.format,'shared-pools-v3');
+ assert.equal(payload.payload.format,'shared-pools-v4');
  assert.equal(payload.payload.targets.length,1);
- assert.equal(validateChoices([target],{results:[{target_id:'t0',choice_id:'c0'}]}).accepted.length,1);
- assert.equal(validateChoices([target],{results:[{target_id:'t0',choice_id:'invalid'}]}).unresolved.length,1);
- assert.equal(validateExperimentalChoices([target],{results:[{target_id:'t0',choice_id:'KEEP'}]},{experimentalHanja:false}).accepted.length,1);
+ assert.equal(validateChoices([target],{results:[{t:'t0',c:'c0'}]}).accepted.length,1);
+ assert.equal(validateChoices([target],{results:[{t:'t0',c:'invalid'}]}).unresolved.length,1);
+ assert.equal(validateExperimentalChoices([target],{results:[{t:'t0',c:null}]},{experimentalHanja:false}).accepted.length,1);
 });

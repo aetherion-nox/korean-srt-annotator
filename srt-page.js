@@ -1,10 +1,11 @@
 import {parseSrt,renderSrt,decodeSrt,mergeSrtResults,fingerprintSrt} from './srt-core.js';
 import {engineConfig} from './local-engine.js';
 import {createSrtManualChannel} from './srt-manual-channel.js';
+import {completeManualAnswer} from './srt-manual-response.js';
 const $=id=>document.getElementById(id);
 let documentState=null,fileName='',results=new Map(),running=false,activePort=null,abortBatch=null,manualRequest=null,operationId='',hasRun=false,loading=false;
 let stats={},currentStats={},previewTimer,loadGeneration=0,runGeneration=0;
-let inputFingerprint='';
+let inputFingerprint='',lastSubmittedAnswer=null;
 const fields={local_determined:'localCount',pending:'pendingCount',model_resolved:'modelCount',unresolved:'unresolvedCount'};
 const report=message=>{$('status').textContent=message;};
 const log=message=>{const lines=$('logs').textContent.split('\n').filter(Boolean);lines.push(`${new Date().toLocaleTimeString()} ${message}`);$('logs').textContent=lines.slice(-200).join('\n');};
@@ -81,7 +82,7 @@ function runBatch(sentences,modes,progressiveAnnotation,offset,total,settings){
     else if(event.type==='MODEL_PROGRESS')report(event.modelTotal?`模型审核 ${event.modelCompleted||0} / ${event.modelTotal}`:'本批无需模型审核。');
     else if(event.type==='DIAGNOSTIC')log(`${event.diagnostic?.message||''}${event.diagnostic?.detail?' '+event.diagnostic.detail:''}`);
     else if(event.type==='MANUAL_REVIEW_REQUEST'){
-     manualRequest=event;$('batchLabel').textContent=`第 ${event.batchNumber} / ${event.batchTotal||'?'} 批 · ${event.targetCount} 个词`;
+     manualRequest=event;lastSubmittedAnswer=null;$('batchLabel').textContent=`第 ${event.batchNumber} / ${event.batchTotal||'?'} 批 · ${event.targetCount} 个词`;
      $('prompt').value=event.text;$('answer').value='';$('answerFile').value='';$('manualStatus').textContent='等待本批结果（无等待超时）；请保留本页面。';$('submitAnswer').disabled=false;$('manual').hidden=false;
      report('等待手动聊天审核（无等待超时）；保留本页面，导入结果后继续。');
     }else if(event.type==='MANUAL_REVIEW_ERROR'){
@@ -89,6 +90,7 @@ function runBatch(sentences,modes,progressiveAnnotation,offset,total,settings){
      // Keep already validated answers server-side; show only missing/invalid IDs.
      if(typeof event.repairPrompt==='string'&&event.repairPrompt){
       $('prompt').value=event.repairPrompt;
+      lastSubmittedAnswer=null;
       $('answer').value='';$('answerFile').value='';
       log('手动审核已保留 '+(event.acceptedCount||0)+' 条已验证结果；补交 '+(event.invalidTargetIds?.length||0)+' 条。');
      }
@@ -103,8 +105,46 @@ function runBatch(sentences,modes,progressiveAnnotation,offset,total,settings){
 }
 $('cancel').addEventListener('click',()=>{if(!running)return;++runGeneration;abortBatch?.();activePort=null;abortBatch=null;manualRequest=null;$('manual').hidden=true;mergeSrtResults(results,{type:'ROLLBACK_PREVIEWS'});refreshPreview();setBusy(false);report('已停止，可下载已经确认的部分结果。');});
 $('download').addEventListener('click',()=>{try{saveFile(renderSrt(documentState,results),fileName.replace(/\.srt$/iu,'')+'-annotated.srt','application/x-subrip;charset=utf-8');}catch(error){report(error.message);}});
-$('copyPrompt').addEventListener('click',async()=>{try{const response=await chrome.runtime.sendMessage({type:'KRA_COPY_TEXT',text:$('prompt').value});if(!response?.ok)throw Error(response?.error||'复制失败，请下载 TXT。');$('manualStatus').textContent='提示词已复制。';}catch(error){$('manualStatus').textContent=error.message;}});
-$('exportPrompt').addEventListener('click',()=>saveFile($('prompt').value,`Korean-SRT-manual-${manualRequest?.batchNumber||1}.txt`));
-$('answerFile').addEventListener('change',async()=>{const file=$('answerFile').files?.[0];if(!file)return;try{if(file.size>5*1024*1024)throw Error('答案超过 5 MiB。');$('answer').value=await file.text();$('manualStatus').textContent='答案已导入，请校验并应用。';}catch(error){$('manualStatus').textContent=error.message;}finally{$('answerFile').value='';}});
-$('submitAnswer').addEventListener('click',()=>{try{if(!manualRequest||!activePort)throw Error('当前没有等待审核的批次。');if(!$('answer').value.trim())throw Error('请先粘贴或导入本批 JSON 结果。');$('submitAnswer').disabled=true;activePort.postMessage({type:'MANUAL_REVIEW_RESPONSE',operationId,requestId:manualRequest.requestId,text:$('answer').value});}catch(error){$('submitAnswer').disabled=false;$('manualStatus').textContent=error.message;}});
+function scrollToManualAnswer(){
+ if(manualRequest&&!$('manual').hidden)$('answer').scrollIntoView({behavior:'smooth',block:'center'});
+}
+function submitManualAnswer(automatic=false){
+ try{
+  if(!manualRequest||!activePort){if(automatic)return;throw Error('当前没有等待审核的批次。');}
+  const text=$('answer').value;
+  if(!text.trim()){if(automatic)return;throw Error('请先粘贴或导入本批 JSON 结果。');}
+  if(automatic&&!completeManualAnswer(text))return;
+  const key=manualRequest.requestId+'\\u0000'+text;
+  if($('submitAnswer').disabled||(automatic&&key===lastSubmittedAnswer))return;
+  lastSubmittedAnswer=key;
+  $('submitAnswer').disabled=true;
+  $('manualStatus').textContent='正在校验本批 JSON…';
+  activePort.postMessage({type:'MANUAL_REVIEW_RESPONSE',operationId,requestId:manualRequest.requestId,text});
+ }catch(error){$('submitAnswer').disabled=false;$('manualStatus').textContent=error.message;}
+}
+$('answer').addEventListener('input',()=>submitManualAnswer(true));
+$('submitAnswer').addEventListener('click',()=>submitManualAnswer(false));
+$('copyPrompt').addEventListener('click',async()=>{
+ try{
+  const response=await chrome.runtime.sendMessage({type:'KRA_COPY_TEXT',text:$('prompt').value});
+  if(!response?.ok)throw Error(response?.error||'复制失败，请下载 TXT。');
+  $('manualStatus').textContent='提示词已复制。';
+ }catch(error){$('manualStatus').textContent=error.message;}
+ finally{scrollToManualAnswer();}
+});
+$('exportPrompt').addEventListener('click',()=>{
+ try{saveFile($('prompt').value,`Korean-SRT-manual-${manualRequest?.batchNumber||1}.txt`);}
+ catch(error){$('manualStatus').textContent=error.message;}
+ scrollToManualAnswer();
+});
+$('answerFile').addEventListener('change',async()=>{
+ const file=$('answerFile').files?.[0];if(!file)return;
+ try{
+  if(file.size>5*1024*1024)throw Error('答案超过 5 MiB。');
+  $('answer').value=await file.text();
+  $('manualStatus').textContent='答案已导入，正在检测 JSON…';
+  submitManualAnswer(true);
+ }catch(error){$('manualStatus').textContent=error.message;}
+ finally{$('answerFile').value='';}
+});
 window.addEventListener('beforeunload',event=>{if(running){event.preventDefault();event.returnValue='';}});
