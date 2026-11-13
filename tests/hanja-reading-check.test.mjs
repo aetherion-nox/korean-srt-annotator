@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import fs from 'node:fs/promises';
+import {parseSrt,renderSrt,mergeSrtResults} from '../srt-core.js';
 import {primaryHangulReading} from '../hanja-reading-data.js';
 import {validateModelHanjaReadings} from '../hanja-reading-check.js';
 import {literalOriginOption} from '../experimental-options.js';
@@ -49,12 +49,15 @@ test('direct model-origin Hanja rejects reading mismatch and tracks unverified o
  assert.equal(literalOriginOption({...target,options:undefined},'韓國',{experimentalHanja:true})?.origin_source,'model-unverified');
 });
 
-test('the page identifies dictionary-backed and model-unverified annotations',async()=>{
- const [js,css]=await Promise.all([
-  fs.readFile(new URL('../content.js',import.meta.url),'utf8'),
-  fs.readFile(new URL('../content.css',import.meta.url),'utf8')
- ]);
- assert.ok(js.includes('data-kra-source'));
- assert.ok(js.includes('model-unverified'));
- assert.ok(css.includes('ruby.kra-ruby[data-kra-source="model-unverified"]'));
+test('SRT renders validated but model-unverified Hanja without DOM-only metadata',()=>{
+ const doc=parseSrt('1\n00:00:01,000 --> 00:00:02,000\n한국이 있다.\n');
+ const sentence=doc.sentences[0];
+ const state=new Map();
+ mergeSrtResults(state,{type:'RESULTS',source:'model',results:[{id:sentence.id,annotations:[{
+  ...annotation('한국','韓國'),origin_source:'model-unverified'
+ }]}]});
+ const rendered=renderSrt(doc,state);
+ assert.match(rendered,/韓國\(한국\)이 있다\./);
+ assert.match(rendered,/00:00:01,000 --> 00:00:02,000/);
+ assert.doesNotMatch(rendered,/model-unverified/);
 });
