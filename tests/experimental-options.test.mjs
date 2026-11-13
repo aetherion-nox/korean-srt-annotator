@@ -11,7 +11,7 @@ const hanja={target_id:'t0',start:0,end:2,surface:'원잠',context:'원잠을 �
 const loan={target_id:'t1',start:0,end:2,surface:'게임',context:'게임을 한다.',options:[
  {choice_id:'KEEP',type:'keep',replacement:'게임',entry_id:null,definitions:[]},
  {choice_id:'n0',type:'nonconversion',replacement:'게임',entry_id:12,definitions:['native meaning']}]};
-const reply=(target_id,choice_id)=>({results:[{target_id,choice_id}]});
+const reply=(target_id,choice_id)=>({results:[{t:target_id,c:choice_id==='KEEP'?null:choice_id}]});
 const choose=(target,choice_id,config)=>validateExperimentalChoices([target],reply(target.target_id,choice_id),config);
 
 test('literal Hanja is read from results.choice_id; no proposal array or x0 required',()=>{
@@ -67,11 +67,11 @@ test('never invent new origins for flagged proper names or incomplete source wor
 
 test('cross-batch, duplicate, extra fields and obsolete experimental arrays are rejected',()=>{
  for(const payload of [
-  {results:[{target_id:'foreign',choice_id:'原潛'}]},
-  {results:[{target_id:'t0',choice_id:'原潛'},{target_id:'t0',choice_id:'KEEP'}]},
+  {results:[{t:'foreign',c:'原潛'}]},
+  {results:[{t:'t0',c:'原潛'},{t:'t0',c:null}]},
   {results:[{target_id:'t0',choice_id:'原潛',replacement:'evil'}]},
-  {results:[{target_id:'t0',choice_id:'x0'}],experimental_options:[]},
-  {results:[{target_id:'t0',choice_id:12}]}
+  {results:[{t:'t0',c:'x0'}],experimental_options:[]},
+  {results:[{t:'t0',c:12}]}
  ]){
   assert.equal(validateExperimentalChoices([hanja],payload,{experimentalHanja:true}).accepted.length,0,JSON.stringify(payload));
  }
@@ -100,8 +100,8 @@ test('only the enabled experimental origin rule is included in each manual/API p
  assert.ok(loanOnly.includes(loanRule)&&!loanOnly.includes(hanjaRule));
  assert.ok(both.includes(hanjaRule)&&both.includes(loanRule));
  for(const instructions of [common,hanjaOnly,loanOnly,both]){
-  assert.ok(instructions.includes('dictionary nonconversion senses')||instructions.includes('Dictionary nonconversion senses'));
-  assert.ok(instructions.includes('KEEP'));
+  assert.ok(instructions.includes('Nonconversion dictionary senses'));
+  assert.ok(instructions.includes('JSON null'));
   assert.ok(instructions.includes('dictionary_name_homograph'));
   assert.ok(instructions.includes('partial_word'));
   assert.ok(instructions.includes('sentence_id'));
@@ -119,19 +119,19 @@ test('only the enabled experimental origin rule is included in each manual/API p
  }
  const packed=buildReviewPayload(hanja.context,[hanja],{experimentalHanja:true}).payload;
  assert.equal(packed.targets[0].options.c0,'p0');
- assert.equal(packed.format,'shared-pools-v3');
+ assert.equal(packed.format,'shared-pools-v4');
  assert.equal(packed.experimental_modes,undefined);
  assert.ok(both.length<common.length+2300,'experimental instructions should remain compact for large batches');
- assert.ok(common.includes('first determine its meaning from the sentence and context'));
- assert.ok(common.includes('Never choose a semantically mismatching candidate'));
+ assert.ok(common.includes('Decide meaning from the sentence and adjacent context'));
+ assert.ok(common.includes('BEFORE selecting a dictionary sense'));
  for(const prompt of [hanjaOnly,loanOnly,both]){
-  assert.ok(prompt.startsWith('OPEN-ENDED ORIGIN AUDIT WITH DICTIONARY OPTIONS'));
-  assert.ok(prompt.includes('FIRST infer its meaning'));
-  assert.ok(prompt.includes('SECOND compare EACH offered dictionary definition'));
-  assert.ok(prompt.includes('THIRD, if NO supplied dictionary option correctly represents'));
-  assert.ok(prompt.includes('DIRECTLY into results[].choice_id'));
-  assert.ok(prompt.includes('Use KEEP only'));
-  assert.ok(prompt.includes('do not invent an origin')||prompt.includes('Do not invent an origin'));
+  assert.ok(prompt.includes('OPEN-ENDED ORIGIN AUDIT'));
+  assert.ok(prompt.includes('FIRST infer its contextual meaning'));
+  assert.ok(prompt.includes('THEN compare every offered dictionary sense'));
+  assert.ok(prompt.includes('When no supplied dictionary sense matches'));
+  assert.ok(prompt.includes('directly in c'));
+  assert.ok(prompt.includes('JSON null'));
+  assert.ok(prompt.includes('never invent a dictionary key'));
   assert.ok(!prompt.includes('you may write'));
  }
  assert.equal((both.match(/FIRST infer/g)||[]).length,1,'the audit order must appear once');
