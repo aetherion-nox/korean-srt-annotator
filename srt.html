@@ -11,13 +11,13 @@
 </section>
 <section class="card"><h2>2. 标注并导出</h2>
 <div class="toggles"><label><input id="hanja" type="checkbox" checked> 汉字词 / 混杂词：經濟(경제)</label><label><input id="loanword" type="checkbox" checked> 外来语：컴퓨터(computer)</label></div>
-<p class="hint">可在设置中分别启用实验性词源与 LLM 智能分词修复，默认关闭；未通过校验的结果不写入字幕。</p>
+<p class="hint">可在设置中分别启用实验性词源与 LLM 智能分词修复，默认关闭；不安全或不存在的选项保留原韩语；目标 ID 等结构错误仍需补交。</p>
 <p class="hint">括号紧贴对应词干，助词和词尾留在原位；混杂词按部分标注，如 게임(game)機(기)。沿用设置中的本地词典、模型审核与手动聊天模式。未确定的词保留原文。</p>
 <div class="buttons"><button id="start" class="primary" disabled>开始标注</button><button id="cancel" disabled>停止</button><button id="download" disabled>下载标注 SRT</button></div>
 <progress id="progress" max="100" value="0" aria-label="字幕处理进度"></progress><p id="status" role="status" aria-live="polite">等待导入。</p>
 <div class="stats"><span>本地确定 <b id="localCount">0</b></span><span>待审核 <b id="pendingCount">0</b></span><span>模型解决 <b id="modelCount">0</b></span><span>未解决 <b id="unresolvedCount">0</b></span></div>
 </section>
-<section id="manual" class="card" hidden><h2>手动聊天审核 <span id="batchLabel"></span></h2><p>复制本批提示词给模型，再粘贴或导入模型返回的完整 JSON。粘贴完整有效 JSON 后会自动校验与应用，无需点击按钮。等待无固定超时；保留本页面即可。若部分答案无效，会保留已校验项并将提示词更新为仅包含待补交的目标，完成后自动继续下一批。</p>
+<section id="manual" class="card" hidden><h2>手动聊天审核 <span id="batchLabel"></span></h2><p>复制本批提示词给模型，再粘贴或导入模型返回的完整 JSON（可以仅为 t/c 数组，也可省略 batch_id）。粘贴完整 JSON 后会自动校验与应用，无需点击按钮。等待无固定超时；保留本页面即可。若部分答案无效，会保留已校验项并将提示词更新为仅包含待补交的目标，完成后自动继续下一批。</p>
 <label>本批提示词<textarea id="prompt" rows="7" readonly></textarea></label><div class="buttons"><button id="copyPrompt">复制提示词</button><button id="exportPrompt">下载提示词 TXT</button><label class="answer-file">导入答案 JSON / TXT<input id="answerFile" type="file" accept=".json,.txt,application/json,text/plain"></label></div>
 <label>本批模型结果<textarea id="answer" rows="6" placeholder='{"batch_id":"…","results":[{"t":"t0","c":"c0"},{"t":"t1","c":null}]}'></textarea></label><button id="submitAnswer" class="primary">校验并应用本批结果</button><p id="manualStatus" role="status"></p></section>
 <section class="card"><div class="preview-head"><h2>字幕预览</h2><label>预览前 <select id="previewLimit"><option value="30">30</option><option value="100">100</option><option value="0">全部</option></select> 条</label></div><div class="preview-grid"><div><h3>原字幕</h3><pre id="original">导入后显示原字幕。</pre></div><div><h3>标注结果</h3><pre id="output">标注结果将显示在这里。</pre></div></div><p class="hint">导出为 UTF-8 SRT。停止或出错后，可下载已经确认的部分结果。</p></section>

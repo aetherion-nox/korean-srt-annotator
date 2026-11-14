@@ -7,6 +7,6 @@ export function completeManualAnswer(text){
  if(fenced)source=fenced[1].trim();
  try{
   const answer=JSON.parse(source);
-  return !!answer&&typeof answer==='object'&&!Array.isArray(answer)&&Array.isArray(answer.results);
+  return Array.isArray(answer)?answer.length>0:!!answer&&typeof answer==='object'&&Array.isArray(answer.results);
  }catch{return false;}
 }

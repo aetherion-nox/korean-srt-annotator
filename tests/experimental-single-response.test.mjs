@@ -49,17 +49,16 @@ test('manual review remaps raw choice_id to local target ID with no proposal arr
  assert.ok(!('experimental_options' in mapped));
 });
 
-test('manual rejects unknown ID and old experimental array while allowing correction',async()=>{
+test('manual falls back to null for unrecognized c, but rejects obsolete experimental array',async()=>{
  const events=[];const controller=new AbortController();
  const session=createManualReviewSession({operationId:'manual-bad',signal:controller.signal,post:e=>events.push(e)});
  const pending=session.request({context:sentence,experimentalHanja:true},[target0]);
  const id=events[0].requestId;
  const submit=payload=>session.submit({operationId:'manual-bad',requestId:id,text:JSON.stringify({batch_id:id,...payload})});
- assert.equal(submit({results:[{t:'t0',c:'x0'}]}),false);
  assert.equal(submit({results:[{t:'t0',c:'原潛'}],experimental_options:[]}),false);
- assert.equal(submit({results:[{t:'t0',c:'原潛'}]}),true);
- assert.equal((await pending).results[0].c,'原潛');
- assert.equal(events.filter(e=>e.type==='MANUAL_REVIEW_ERROR').length,2);
+ assert.equal(submit({results:[{t:'t0',c:'x0'}]}),true);
+ assert.equal((await pending).results[0].c,null);
+ assert.equal(events.filter(e=>e.type==='MANUAL_REVIEW_ERROR').length,1);
 });
 
 test('API sends results-only protocol and configurable max_tokens (DeepSeek)',async()=>{
@@ -119,7 +118,7 @@ test('stream previews valid raw Hanja and dictionary choices from completed rows
  assert.deepEqual(events.at(-1),['原潛','n0']);
  const badEvents=[],bad=experimentalChoicePreviewParser([target0],{experimentalHanja:true},rows=>badEvents.push(rows));
  bad(JSON.stringify({results:[{t:'local-0',c:'x0'}]}));
- assert.ok(badEvents.every(rows=>rows.length===0));
+ assert.deepEqual(badEvents.at(-1).map(row=>row.option.type),['keep']);
 });
 
 test('output cap defaults, validation, and planning budgets are consistent',()=>{
@@ -142,7 +141,11 @@ test('target flags no longer need a separate proposal reservation or field',()=>
  const experimental=describeBatchBudget(sentence,[target0,target1],{tier:'512k',manual:true,experimentalHanja:true});
  assert.ok(experimental.inputTokens>ordinary.inputTokens);
  assert.ok(experimental.outputTokens>ordinary.outputTokens);
- const forbidden=describeBatchBudget(sentence,[{...target0,proper_noun:true},{...target1,partial_word:true}],
+ const properNoun=describeBatchBudget(sentence,[{...target0,proper_noun:true},target1],
+  {tier:'512k',manual:true,experimentalHanja:true});
+ assert.equal(properNoun.outputTokens,experimental.outputTokens,
+  'proper noun flags alone must not suppress literal-origin output budget');
+ const forbidden=describeBatchBudget(sentence,[{...target0,dictionary_person_name:true},{...target1,scan_only:true}],
   {tier:'512k',manual:true,experimentalHanja:true});
  assert.ok(forbidden.outputTokens<experimental.outputTokens);
 });

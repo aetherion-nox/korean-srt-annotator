@@ -44,10 +44,10 @@ $('start').addEventListener('click',async()=>{
  if(!modes.hanja&&!modes.loanword){report('请至少启用一种标注。');return;}
  results=new Map();stats={};currentStats={};hasRun=true;manualRequest=null;$('manual').hidden=true;$('progress').value=0;setBusy(true);updateStats();refreshPreview();
  try{
-  report('正在启动词典引擎…');
+  report('正在准备标注…');
   const [{progressiveAnnotation=false},settings]=await Promise.all([chrome.storage.local.get('progressiveAnnotation'),engineConfig()]);
   const parsedFingerprint=await fingerprintSrt(documentState.source);
-  log('运行依据 '+JSON.stringify({input_sha256:inputFingerprint,parsed_sha256:parsedFingerprint,extension_version:chrome.runtime.getManifest().version,modes,nameProtection:settings.nameProtection,reviewAllCandidates:settings.reviewAllCandidates,manualModelReview:settings.manualModelReview,batchContextTier:settings.batchContextTier,smartSegmentation:settings.smartSegmentation,experimentalHanja:settings.experimentalHanja,experimentalLoanword:settings.experimentalLoanword,hanjaReadingCheck:settings.hanjaReadingCheck,filterUntimedLines:$('filterUntimedLines').checked}));
+  log('运行依据 '+JSON.stringify({input_sha256:inputFingerprint,parsed_sha256:parsedFingerprint,extension_version:chrome.runtime.getManifest().version,modes,nameProtection:settings.nameProtection,reviewAllCandidates:settings.reviewAllCandidates,manualModelReview:settings.manualModelReview,batchContextTier:settings.batchContextTier,smartSegmentation:settings.smartSegmentation,experimentalHanja:settings.experimentalHanja,experimentalLoanword:settings.experimentalLoanword,filterDictionaryPeople:settings.filterDictionaryPeople,hanjaReadingCheck:settings.hanjaReadingCheck,filterUntimedLines:$('filterUntimedLines').checked}));
   const sentences=documentState.sentences;
   if(generation!==runGeneration)return;
   // Bound the existing pipeline operation; review batching still follows its saved tier.
