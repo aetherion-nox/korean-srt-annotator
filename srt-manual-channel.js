@@ -24,7 +24,7 @@ export function createSrtManualChannel(settings){
    started=true;operationId=message.operationId;
    session=createManualReviewSession({operationId,post,signal:controller.signal});
    const allowNoDictionary=settings.enableModelReview&&((settings.experimentalHanja===true&&message.modes?.hanja===true)||(settings.experimentalLoanword===true&&message.modes?.loanword===true));
-   runSentencePipeline({...message,nameProtection:settings.nameProtection,filterDictionaryPeople:settings.filterDictionaryPeople,reviewAllCandidates:settings.reviewAllCandidates,smartSegmentation:settings.smartSegmentation,reviewLocalConversions:settings.enableModelReview&&settings.reviewLocalConversions},post,{
+   runSentencePipeline({...message,nameProtection:settings.nameProtection,filterDictionaryPeople:settings.filterDictionaryPeople,experimentalHanjaAudit:settings.enableModelReview===true&&settings.experimentalHanja===true,experimentalLoanwordAudit:settings.enableModelReview===true&&settings.experimentalLoanword===true,reviewAllCandidates:settings.reviewAllCandidates,smartSegmentation:settings.smartSegmentation,reviewLocalConversions:settings.enableModelReview&&settings.reviewLocalConversions},post,{
     signal:controller.signal,
     enabled:settings.enableModelReview,
     status:(signal,progress)=>engineStatus(signal,progress,{allowNoDictionary}),
