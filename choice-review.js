@@ -18,7 +18,20 @@ function validWireRow(row,known){
 function matchedWireOption(target,value,config){
  const options=filterReviewTarget(target,config).options;
  if(value===null)return options.find(o=>o.type==='keep')||null;
- return options.find(o=>o.type!=='keep'&&o.choice_id===value)||null;
+ const selected=options.find(o=>o.type!=='keep'&&o.choice_id===value);
+ // A literal Hanja personal name is permitted ONLY when the local dictionary
+ // supplied that exact writing for this full occurrence. Treat it as the
+ // original dictionary sense, not as an unverified experimental guess.
+ if(!selected&&typeof value==='string'&&target.dictionary_person_name===true&&
+    target.verified_person_hanja?.includes(value)){
+  const matched=options.find(o=>o.type==='hanja'&&o.replacement===value&&o.entry_id!=null);
+  if(matched)return matched;
+ }
+ // A nonexistent numbered dictionary option means no conversion, in both
+ // ordinary and experimental modes. Authentic literal origins remain distinct.
+ if(selected)return selected;
+ return typeof value==='string'&&/^[cn]\d+$/u.test(value)?
+  options.find(o=>o.type==='keep')||null:null;
 }
 export function validateChoices(targets,response,config={}){
  const accepted=[],unresolved=[];
@@ -29,7 +42,9 @@ export function validateChoices(targets,response,config={}){
   return {accepted:[],unresolved:targets};
  for(const target of targets){
   const matches=rows.filter(row=>row.t===target.target_id);
-  const option=matches.length===1?matchedWireOption(target,matches[0].c,config):null;
+  // A uniquely identified result with an unusable choice is safe to leave
+  // untouched. Structural problems (unknown/duplicate/missing t) are not.
+  const option=matches.length===1?matchedWireOption(target,matches[0].c,config)||target.options.find(o=>o.type==='keep'):null;
   if(option)accepted.push({target,option});else unresolved.push(target);
  }
  return {accepted,unresolved};
@@ -50,7 +65,12 @@ export function validateExperimentalChoices(targets,response,config={}){
   if(option){accepted.push({target,option});continue;}
   const generated=literalOriginOption(target,id,config);
   if(generated){accepted.push({target,option:generated});experimentalAccepted++;}
-  else{unresolved.push(target);experimentalRejected++;
+  else{
+   // Reject the proposed origin, not the whole target. The original Korean
+   // remains unchanged when an experimental spelling is unsafe/unavailable.
+   const keep=target.options.find(o=>o.type==='keep');
+   if(keep)accepted.push({target,option:keep});else unresolved.push(target);
+   experimentalRejected++;
    const reason=explainLiteralOriginRejection(target,id,config);
    rejectionCounts[reason]=(rejectionCounts[reason]||0)+1;
    if(rejectionSamples.length<16)rejectionSamples.push({target_id:target.target_id,surface:target.surface,c:id,reason});
@@ -82,7 +102,7 @@ export function safeDetail(value,config={}){
  return text.replace(/Bearer\s+[^\s"'<>]+/gi,'Bearer [REDACTED]').replace(/sk-[A-Za-z0-9_-]+/g,'[REDACTED]').slice(0,3000);
 }
 export function modelTargets(targets,config={}){
- return filterReviewTargets(targets,config).map(t=>({target_id:t.target_id,start:t.start,end:t.end,surface:t.surface,context:t.context,...(t.adjacent_context?{adjacent_context:t.adjacent_context}:{}),...(t.morphology?{morphology:t.morphology}:{}),...(t.pos_conflict?{pos_conflict:true}:{}),...(t.partial_word?{partial_word:true}:{}),...(t.proper_noun===true?{proper_noun:true}:{}),...(t.dictionary_person_name===true?{dictionary_person_name:true}:{}),...(t.dictionary_name_homograph===true?{dictionary_name_homograph:true}:{}),...(t.suspected_person_name===true?{suspected_person_name:true}:{}),...(config.smartSegmentation===true?{repair_context:t.repair_context,repair_sentence_key:t.repair_sentence_key,original_target_id:t.original_target_id,...(t.scan_only?{scan_only:true}:{})}:{}),options:t.options.map(o=>({choice_id:o.choice_id,type:o.type,replacement:o.replacement,entry_id:o.entry_id,definitions:o.definitions,...(o.written_form?{written_form:o.written_form}:{}),...(o.part_of_speech?{part_of_speech:o.part_of_speech}:{}),...(o.subject_category?{subject_category:o.subject_category}:{}),...(o.semantic_category?{semantic_category:o.semantic_category}:{}),...(Array.isArray(o.segments)?{segments:o.segments}:{})}))}));
+ return filterReviewTargets(targets,config).map(t=>({target_id:t.target_id,start:t.start,end:t.end,surface:t.surface,context:t.context,...(t.adjacent_context?{adjacent_context:t.adjacent_context}:{}),...(t.morphology?{morphology:t.morphology}:{}),...(t.pos_conflict?{pos_conflict:true}:{}),...(t.proper_noun===true?{proper_noun:true}:{}),...(t.dictionary_person_name===true?{dictionary_person_name:true}:{}),...(Array.isArray(t.verified_person_hanja)&&t.verified_person_hanja.length?{verified_person_hanja:t.verified_person_hanja}:{}),...(t.dictionary_name_homograph===true?{dictionary_name_homograph:true}:{}),...(t.suspected_person_name===true?{suspected_person_name:true}:{}),...(t.experimental_hanja_audit===true?{experimental_hanja_audit:true}:{}),...(t.experimental_loanword_audit===true?{experimental_loanword_audit:true}:{}),...(config.smartSegmentation===true?{repair_context:t.repair_context,repair_sentence_key:t.repair_sentence_key,original_target_id:t.original_target_id,...(t.scan_only?{scan_only:true}:{})}:{}),options:t.options.map(o=>({choice_id:o.choice_id,type:o.type,replacement:o.replacement,entry_id:o.entry_id,definitions:o.definitions,...(o.written_form?{written_form:o.written_form}:{}),...(o.part_of_speech?{part_of_speech:o.part_of_speech}:{}),...(o.subject_category?{subject_category:o.subject_category}:{}),...(o.semantic_category?{semantic_category:o.semantic_category}:{}),...(Array.isArray(o.segments)?{segments:o.segments}:{})}))}));
 }
 export async function reviewTargets(config,targets,signal){
  if(!config.enableModelReview || !targets.length)return {accepted:[],unresolved:targets,errors:[]};
