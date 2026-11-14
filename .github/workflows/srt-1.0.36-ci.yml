@@ -2,7 +2,7 @@ name: Verify and package SRT v1.0.36
 on:
   push:
     branches:
-      - feature/srt-v1.0.36-web-1.1.56.7
+      - feature/srt-v1.0.36-web-1.1.56.28
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -40,6 +40,10 @@ jobs:
           PYTHONPATH=python/browser-support python3 tests/test_dictionary_names.py
           PYTHONPATH=python/browser-support python3 tests/test_name_ambiguity.py
           PYTHONPATH=python/browser-support python3 tests/test_pos_coverage.py
+          PYTHONPATH=python/browser-support python3 tests/test_filter_dictionary_people.py
+          PYTHONPATH=python/browser-support python3 tests/test_experimental_hanja_audit.py
+          PYTHONPATH=python/browser-support python3 tests/test_headword_aliases.py
+          PYTHONPATH=python/browser-support python3 tests/test_smart_segmentation_context.py
       - name: Package installable ZIP (verified compressed Kiwi models)
         run: |
           python3 - <<'PY'
