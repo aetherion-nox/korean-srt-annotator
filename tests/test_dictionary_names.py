@@ -20,13 +20,50 @@ class DictionaryNames(unittest.IsolatedAsyncioTestCase):
  async def run_name(self,on=True,split=False,review=False):
   from backend.analysis import Engine
   return await Engine(self.path,tokenizer=self.tokenized('이수민 씨',split)).analyze('이수민 씨',dict(hanja=True,loanword=True,nameProtection=on,reviewAll=review))
- async def test_dictionary_person_is_preserved_even_if_nng_and_unique(self):
+ async def test_dictionary_proven_person_is_reviewed_even_if_nng_or_split(self):
   for split in [False,True]:
    for review in [False,True]:
     r=await self.run_name(split=split,review=review)
     self.assertEqual(r['annotations'],[])
-    self.assertEqual(r['targets'],[])
+    self.assertEqual(len(r['targets']),1,(split,review,r))
+    person=r['targets'][0]
+    self.assertEqual(person['surface'],'이수민')
+    self.assertEqual(person['verified_person_hanja'],['李壽民'])
+    self.assertTrue(person['dictionary_person_name'])
+    self.assertTrue(any(o['type']=='hanja' and o['entry_id']==self.person and
+                        o['replacement']=='李壽民' for o in person['options']))
     self.assertGreater(r['stats']['protected_names'],0)
+
+ async def test_filtered_dictionary_person_removes_verified_hanja_candidate(self):
+  from backend.analysis import Engine
+  t=self.tokenized('이수민 씨')
+  r=await Engine(self.path,tokenizer=t).analyze('이수민 씨',dict(
+      hanja=True,loanword=True,nameProtection=True,filterDictionaryPeople=True,
+      experimentalHanjaAudit=True))
+  person=[x for x in r['targets'] if x['surface']=='이수민']
+  self.assertEqual(person,[],r)
+  self.assertEqual(r['annotations'],[],r)
+  unfiltered=await Engine(self.path,tokenizer=t).analyze('이수민 씨',dict(
+      hanja=True,loanword=True,nameProtection=True,filterDictionaryPeople=False,
+      experimentalHanjaAudit=True))
+  self.assertEqual(unfiltered['targets'][0]['verified_person_hanja'],['李壽民'])
+
+ async def test_person_without_verified_hanja_remains_filtered_or_keep_only(self):
+  from backend.analysis import Engine
+  import sqlite3
+  record=self.add('한동훈',None,'명사','현직 정치인.')
+  with sqlite3.connect(self.path) as db:
+   db.execute("UPDATE entries SET subject_category='인명' WHERE id=?",(record,))
+  t=tokenizer();t._kiwi=types.SimpleNamespace(tokenize=lambda _:[
+      types.SimpleNamespace(form='한동훈',tag='NNP',start=0,len=3)])
+  r=await Engine(self.path,tokenizer=t).analyze('한동훈',dict(
+      hanja=True,loanword=True,nameProtection=True,filterDictionaryPeople=True,
+      experimentalLoanwordAudit=True))
+  matches=[x for x in r['targets'] if x['surface']=='한동훈']
+  self.assertEqual(len(matches),1)
+  self.assertTrue(matches[0]['dictionary_person_name'])
+  self.assertNotIn('verified_person_hanja',matches[0])
+  self.assertEqual([x['type'] for x in matches[0]['options']],['keep'])
  async def test_disabled_protection_forces_identity_review(self):
   r=await self.run_name(on=False,split=True)
   self.assertEqual(r['annotations'],[])
@@ -53,5 +90,31 @@ class DictionaryNames(unittest.IsolatedAsyncioTestCase):
     self.assertEqual(r['annotations'],[],(word,enabled,r))
     self.assertEqual(bool(r['targets']),not enabled,(word,enabled,r))
     if not enabled:self.assertTrue(r['targets'][0]['dictionary_person_name'])
+
+ async def test_experimental_latin_audits_full_proper_nouns_without_automatic_name_conversion(self):
+  from backend.analysis import Engine
+  for word in ('트럼프','트위터','엔비디아'):
+   t=tokenizer()
+   t._kiwi=types.SimpleNamespace(tokenize=lambda _,w=word:[
+    types.SimpleNamespace(form=w,tag='NNP',start=0,len=len(w)),
+    types.SimpleNamespace(form='는',tag='JX',start=len(w),len=1)])
+   source=word+'는'
+   modes=dict(hanja=True,loanword=True,nameProtection=True,filterDictionaryPeople=True)
+   ordinary=await Engine(self.path,tokenizer=t).analyze(source,modes)
+   self.assertFalse(any(x.get('experimental_loanword_audit') for x in ordinary['targets']))
+   audit=await Engine(self.path,tokenizer=t).analyze(source,{**modes,'experimentalLoanwordAudit':True})
+   targets=[x for x in audit['targets'] if x.get('experimental_loanword_audit')]
+   self.assertEqual(len(targets),1,(word,audit))
+   self.assertEqual((targets[0]['start'],targets[0]['end'],targets[0]['surface']),
+                    (0,len(word),word))
+   self.assertEqual([o['type'] for o in targets[0]['options']],['keep'])
+   self.assertFalse(any(a['surface']==word for a in audit['annotations']))
+  # An explicit space remains a hard target boundary, including NNP spans.
+  t=tokenizer()
+  t._kiwi=types.SimpleNamespace(tokenize=lambda _:[
+   types.SimpleNamespace(form='젠슨 황',tag='NNP',start=0,len=4)])
+  result=await Engine(self.path,tokenizer=t).analyze('젠슨 황',{
+   'hanja':True,'loanword':True,'experimentalLoanwordAudit':True})
+  self.assertFalse(any(x.get('experimental_loanword_audit') for x in result['targets']))
 
 if __name__=='__main__':unittest.main(verbosity=2)
