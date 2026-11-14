@@ -36,7 +36,7 @@ test('manual and API export use identical allowed keys and validation rejects re
  const wire=modelTargets([t]);assert.deepEqual(wire[0].options.map(o=>o.choice_id),['KEEP','c0','n0']);
  const manual=JSON.parse(buildManualPrompt('가',[t],'batch').split('\n').at(-1));
  assert.deepEqual(manual.targets[0].options,packed(t).targets[0].options);
- assert.equal(validateChoices([t],{results:[{t:'t0',c:'c1'}]}).accepted.length,0);
+ assert.equal(validateChoices([t],{results:[{t:'t0',c:'c1'}]}).accepted[0].option.type,'keep');
  assert.equal(validateChoices([t],{results:[{t:'t0',c:null}]}).accepted.length,1);
  assert.equal(validateChoices([t],{results:[{t:'t0',c:'n0'}]}).accepted.length,1);
  assert.equal(modelTargets([target('MAG',[option('c0','명사')])])[0].pos_conflict,true);
@@ -93,7 +93,7 @@ test('NNB keeps only explicit dependent POS and unknown senses across API and ma
  assert.deepEqual(modelTargets([t])[0].options.map(o=>o.choice_id),['KEEP',...expected]);
  const manual=JSON.parse(buildManualPrompt(context,[t],'batch').split('\n').at(-1));
  assert.deepEqual(Object.keys(manual.targets[0].options),expected);assert.equal(manual.sentences[0].text,context);
- assert.equal(validateChoices([t],{results:[{t:'t0',c:'c3'}]}).accepted.length,0);
+ assert.equal(validateChoices([t],{results:[{t:'t0',c:'c3'}]}).accepted[0].option.type,'keep');
  assert.deepEqual(modelTargets([t],{reviewPosFilter:false})[0].options.map(o=>o.choice_id),t.options.map(o=>o.choice_id));
  assert.equal(validateChoices([t],{results:[{t:'t0',c:'c3'}]},{reviewPosFilter:false}).accepted.length,1);
  const conflicted=packed(target('NNB',[option('c0','명사'),option('n0','名詞','nonconversion')]));
@@ -127,12 +127,11 @@ test('derived word retains segments while stripping redundant Kiwi POS',()=>{
  assert.deepEqual(out.morphology,[{form:'사실',start:0,end:2},{form:'상',start:2,end:3}]);
  assert.deepEqual(Object.keys(out.options),['c0']);
 });
-test('conflict, disabled filter, unknown POS, partial-word and unknown meaning preserve original tags',()=>{
+test('conflict, disabled filter, unknown POS and unknown meaning preserve original tags',()=>{
  const cases=[
   [target('MAG',[option('c0','명사')]),{}],
   [target('NNG',[option('c0','명사')]),{reviewPosFilter:false}],
   [target('UNKNOWN',[option('c0','명사')]),{}],
-  [{...target('NNG',[option('c0','명사')]),partial_word:true},{}],
   [target('NNG',[option('c0',null)]),{}]
  ];
  for(const [t,config] of cases){

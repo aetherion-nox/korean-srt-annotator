@@ -31,16 +31,60 @@ test('original dictionary keys continue to work, including KEEP, c0 and n0',()=>
   assert.equal(result.experimentalAccepted,0);
  }
  assert.equal(choose(loan,'n0',{experimentalLoanword:true}).accepted[0].option.type,'nonconversion');
- assert.equal(validateChoices([hanja],reply('t0','原潛')).accepted.length,0,'ordinary mode must not accept raw origins');
- assert.equal(choose(hanja,'元箴',{experimentalHanja:true}).unresolved.length,1,'existing dictionary spelling requires its c0 key');
+ assert.equal(validateChoices([hanja],reply('t0','原潛')).accepted[0].option.type,'keep',
+  'ordinary mode must not convert unsupported raw origins');
+ assert.equal(choose(hanja,'元箴',{experimentalHanja:true}).accepted.length,1,'matching dictionary spelling can be proposed independently');
+});
+
+test('identical literal origin and dictionary spelling remain separate evidence for Musk, Yugo and Hanja',()=>{
+ const musk={target_id:'t560',start:2,end:5,surface:'머스크',context:'멜론머스크',
+  suspected_person_name:true,proper_noun:true,options:[
+   {choice_id:'KEEP',type:'keep',replacement:'머스크',entry_id:null,definitions:[]},
+   ...['c0','c1','c2'].map((id,i)=>({choice_id:id,type:'loanword',
+    replacement:'musk',entry_id:100+i,definitions:['unrelated dictionary meaning']}))
+  ]};
+ const yugo={target_id:'t577',start:1,end:3,surface:'유고',context:'‘유고의 그림자’',
+  suspected_person_name:true,options:[
+   {choice_id:'KEEP',type:'keep',replacement:'유고',entry_id:null,definitions:[]},
+   {choice_id:'c9',type:'loanword',replacement:'Yugo',entry_id:209,definitions:['former country']}
+  ]};
+ for(const [target,raw,existingKey] of [[musk,'musk','c0'],[yugo,'Yugo','c9']]){
+  const independent=choose(target,raw,{experimentalLoanword:true});
+  assert.equal(independent.accepted.length,1,raw);
+  assert.equal(independent.experimentalAccepted,1);
+  assert.equal(independent.accepted[0].option.origin_source,'model-unverified');
+  assert.equal(independent.accepted[0].option.entry_id,'experimental:loanword');
+  assert.deepEqual(projectAnnotation(target.context,{...target,...independent.accepted[0].option})
+   .map(a=>[a.start,a.end,a.replacement]),[[target.start,target.end,raw]]);
+  const dictionary=choose(target,existingKey,{experimentalLoanword:true});
+  assert.equal(dictionary.experimentalAccepted,0);
+  assert.equal(dictionary.accepted[0].option.entry_id,target.options.find(o=>o.choice_id===existingKey).entry_id);
+  assert.equal(choose(target,raw,{}).accepted[0].option.type,'keep',
+   'open-origin still requires enabling loanword mode');
+ }
+ const oldHanja={...hanja,options:[
+  hanja.options[0],{...hanja.options[1],replacement:'原潛'}
+ ]};
+ const literal=choose(oldHanja,'原潛',{experimentalHanja:true});
+ assert.equal(literal.accepted.length,1);
+ assert.equal(literal.experimentalAccepted,1);
+ assert.equal(literal.accepted[0].option.entry_id,'experimental:hanja');
+ assert.equal(choose(oldHanja,'c0',{experimentalHanja:true}).accepted[0].option.entry_id,10);
+ assert.equal(choose({...oldHanja,dictionary_person_name:true},'原潛',{experimentalHanja:true}).accepted[0].option.type,'keep',
+  'personal-name Hanja protection still rejects the proposed conversion');
 });
 
 test('Latin spelling is validated as loanword without trusting an invented pool key',()=>{
  const result=choose(loan,'game',{experimentalLoanword:true});
  assert.equal(result.accepted.length,1);assert.equal(result.accepted[0].option.type,'loanword');
  assert.deepEqual(projectAnnotation(loan.context,{...result.accepted[0].target,...result.accepted[0].option}).map(a=>a.replacement),['game']);
- for(const id of ['x0','c99','n999','p0','KEEP '])
-  assert.equal(choose(loan,id,{experimentalLoanword:true}).unresolved.length,1,id);
+ for(const id of ['x0','p0','KEEP '])
+  assert.equal(choose(loan,id,{experimentalLoanword:true}).accepted[0].option.type,'keep',id);
+ for(const id of ['c99','n999']){
+  const accepted=choose(loan,id,{experimentalLoanword:true});
+  assert.equal(accepted.accepted[0].option.type,'keep',id);
+  assert.equal(accepted.experimentalAccepted,0,id);
+ }
 });
 
 test('script, alignment and enabled-mode guards reject invented or malformed values',()=>{
@@ -52,17 +96,47 @@ test('script, alignment and enabled-mode guards reject invented or malformed val
   [loan,' game',{experimentalLoanword:true}],
   [hanja,'原潛\nKEEP',{experimentalHanja:true}]
  ]){
-  assert.equal(choose(target,raw,config).unresolved.length,1,JSON.stringify(raw));
+  assert.equal(choose(target,raw,config).accepted[0].option.type,'keep',JSON.stringify(raw));
  }
 });
 
-test('never invent new origins for flagged proper names or incomplete source words',()=>{
- for(const flag of ['proper_noun','suspected_person_name','dictionary_person_name','dictionary_name_homograph','partial_word']){
+test('Hanja proper nouns are eligible except flagged personal names',()=>{
+ const proper={...hanja,proper_noun:true};
+ assert.equal(canProposeExperimentalOption(proper,'hanja'),true);
+ assert.equal(choose(proper,'原潛',{experimentalHanja:true}).accepted.length,1);
+ for(const flag of ['suspected_person_name','dictionary_person_name','dictionary_name_homograph']){
   const t={...hanja,[flag]:true};
-  assert.equal(canProposeExperimentalOption(t),false);
-  assert.equal(choose(t,'原潛',{experimentalHanja:true}).unresolved.length,1,flag);
-  assert.equal(choose(t,'c0',{experimentalHanja:true}).accepted.length,1,'dictionary keys are independent of literal filter');
+  assert.equal(canProposeExperimentalOption(t,'hanja'),false,flag);
+  assert.equal(choose(t,'原潛',{experimentalHanja:true}).accepted[0].option.type,'keep',flag);
+  assert.equal(choose(t,'c0',{experimentalHanja:true}).accepted.length,1,'dictionary keys remain available');
  }
+});
+
+test('compound components accept aligned Latin and Hanja origins without a boundary flag',()=>{
+ const companyContext='L3해리스가 운영한다';
+ const company={target_id:'t383',start:2,end:5,surface:'해리스',context:companyContext,
+  proper_noun:true,dictionary_person_name:true,experimental_loanword_audit:true,
+  options:[{choice_id:'KEEP',type:'keep',replacement:'해리스',entry_id:null,definitions:[]}]};
+ const companyResult=choose(company,'Harris',{experimentalLoanword:true});
+ assert.equal(canProposeExperimentalOption(company,'loanword'),true);
+ assert.equal(companyResult.accepted.length,1);
+ assert.deepEqual(projectAnnotation(companyContext,{...company,...companyResult.accepted[0].option})
+  .map(a=>[a.start,a.end,a.replacement]),[[2,5,'Harris']]);
+ assert.equal(companyContext.slice(0,company.start)+'Harris'+companyContext.slice(company.end),'L3Harris가 운영한다');
+
+ const compound={target_id:'t384',start:2,end:4,surface:'정책',context:'경제정책',
+  options:[{choice_id:'KEEP',type:'keep',replacement:'정책',entry_id:null,definitions:[]}]};
+ const hanjaResult=choose(compound,'政策',{experimentalHanja:true});
+ assert.equal(canProposeExperimentalOption(compound,'hanja'),true);
+ assert.equal(hanjaResult.accepted.length,1);
+ assert.deepEqual(projectAnnotation(compound.context,{...compound,...hanjaResult.accepted[0].option})
+  .map(a=>[a.start,a.end,a.replacement]),[[2,4,'政策']]);
+ assert.equal(choose(compound,'經濟政策',{experimentalHanja:true}).accepted[0].option.type,'keep',
+  'extra Hanja characters must not overwrite a partial source span');
+
+ const partialDictionary={...hanja};
+ assert.equal(choose(partialDictionary,'c0',{experimentalHanja:true}).accepted.length,1,
+  'pre-existing dictionary choices remain valid');
 });
 
 test('cross-batch, duplicate, extra fields and obsolete experimental arrays are rejected',()=>{
@@ -77,15 +151,12 @@ test('cross-batch, duplicate, extra fields and obsolete experimental arrays are 
  }
 });
 
-test('spaced Hanja phrase infers source-aligned segments while preserving the space',()=>{
+test('cross-space lexical targets cannot be created from dictionary alias spellings',()=>{
  const t={target_id:'t2',start:0,end:6,surface:'이산화 탄소',context:'이산화 탄소',options:[
   {choice_id:'KEEP',type:'keep',replacement:'이산화 탄소',entry_id:null,definitions:[]}]};
- const result=choose(t,'二酸化炭素',{experimentalHanja:true});
- assert.equal(result.accepted.length,1);
- assert.equal(result.accepted[0].option.replacement,'二酸化 炭素');
- assert.deepEqual(projectAnnotation(t.context,{...t,...result.accepted[0].option}).map(a=>[a.surface,a.replacement]),
-  [['이산화','二酸化'],['탄소','炭素']]);
+ assert.equal(choose(t,'二酸化炭素',{experimentalHanja:true}).accepted[0].option.type,'keep');
  assert.equal(literalOriginOption(t,'二酸化',{experimentalHanja:true}),null);
+ assert.equal(choose(t,'KEEP',{experimentalHanja:true}).accepted[0].option.type,'keep');
 });
 
 test('only the enabled experimental origin rule is included in each manual/API prompt',()=>{
@@ -103,7 +174,7 @@ test('only the enabled experimental origin rule is included in each manual/API p
   assert.ok(instructions.includes('Nonconversion dictionary senses'));
   assert.ok(instructions.includes('JSON null'));
   assert.ok(instructions.includes('dictionary_name_homograph'));
-  assert.ok(instructions.includes('partial_word'));
+  assert.ok(!instructions.includes('partial_word'));
   assert.ok(instructions.includes('sentence_id'));
   assert.ok(!/experimental_options|experimental_modes|x0|开启的实验类型|only if.*enabled/i.test(instructions));
  }
@@ -113,7 +184,7 @@ test('only the enabled experimental origin rule is included in each manual/API p
   assert.equal(payload.batch_id,'BATCH');
   assert.equal(payload.experimental_modes,undefined);
   assert.ok(prompt.startsWith(buildReviewInstructions(config)));
-  assert.ok(prompt.includes('Copy batch_id'));
+  assert.ok(prompt.includes('Copy the current batch_id exactly'));
   assert.ok(prompt.includes('"results"'));
   assert.ok(!prompt.includes('"experimental_options":['));
  }
