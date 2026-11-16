@@ -196,6 +196,13 @@ const qwenNotes={
  ja:'API キーとエンドポイントのリージョンを一致させてください。コンソールのワークスペース専用 URL にも対応します。',
  ko:'API Key와 엔드포인트의 리전을 일치시키세요. 콘솔의 워크스페이스 전용 전체 URL도 지원합니다.'
 };
+const hunyuanNotes={
+ 'zh-CN':'TokenHub 默认广州地域，海外账号请把接口改为 https://tokenhub-intl.tencentmaas.com/v1/chat/completions；API Key 与接入地域必须一致。',
+ 'zh-TW':'TokenHub 預設廣州區域；國際帳戶請改用 https://tokenhub-intl.tencentmaas.com/v1/chat/completions；API Key 與區域必須一致。',
+ en:'TokenHub defaults to Guangzhou. For Singapore-based accounts use https://tokenhub-intl.tencentmaas.com/v1/chat/completions; the region must match the API key.',
+ ja:'TokenHub は既定で広州地域です。シンガポール地域では https://tokenhub-intl.tencentmaas.com/v1/chat/completions を使い、キーと地域を一致させてください。',
+ ko:'TokenHub 기본은 광저우 리전입니다. 싱가포르 리전은 https://tokenhub-intl.tencentmaas.com/v1/chat/completions 를 사용하고 API Key 리전을 맞추세요.'
+};
 const fixedThinkingNotes={
  'zh-CN':['此模型不使用思考模式。','此模型始终开启思考。'],
  'zh-TW':['此模型不使用思考模式。','此模型始終開啟思考。'],
@@ -216,6 +223,7 @@ function refreshThinkingControls(effort=effortInput.value) {
   if(capability?.thinking==='none')note.textContent=(fixedThinkingNotes[uiLocale.value]||fixedThinkingNotes.en)[0];
   if(capability?.thinking==='required'&&!efforts.length)note.textContent=(fixedThinkingNotes[uiLocale.value]||fixedThinkingNotes.en)[1];
   if(providerInput.value==='qwen')note.textContent+=' '+(qwenNotes[uiLocale.value]||qwenNotes.en);
+   if(providerInput.value==='hunyuan')note.textContent+=' '+(hunyuanNotes[uiLocale.value]||hunyuanNotes.en);
   docs.hidden=!capability?.docs;docs.textContent=t('modelDocs');if(capability?.docs)docs.href=capability.docs;else docs.removeAttribute('href');
   document.querySelector('#reasoningEffortRow').hidden=!capability||!efforts.length||(capability.thinking==='toggle'&&disableThinkingInput.checked);
 }

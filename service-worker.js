@@ -487,5 +487,5 @@ function handleStreamingPort(port){
  });
 }
 
-async function migrateEngineSettings(){const state=await chrome.storage.local.get(['enableModelReview']);if(state.enableModelReview===undefined)await chrome.storage.local.set({enableModelReview:false});}
+async function migrateEngineSettings(){const state=await chrome.storage.local.get(['enableModelReview']);if(state.enableModelReview===undefined)await chrome.storage.local.set({enableModelReview:true});}
 migrateEngineSettings().catch(console.error);
