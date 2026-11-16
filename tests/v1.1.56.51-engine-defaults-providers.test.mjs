@@ -2,16 +2,13 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import vm from 'node:vm';
-import {createRequire} from 'node:module';
 import {ENGINE_SWITCH_DEFAULTS,engineSwitchValues} from '../engine-defaults.js';
 import {engineConfig} from '../local-engine.js';
 import {normalizeBatchContextTier} from '../batch-budget.js';
 import {reviewTargets,thinkingSettings} from '../choice-review.js';
 
-const {JSDOM}=createRequire(import.meta.url)('jsdom');
 const html=await fs.readFile(new URL('../options.html',import.meta.url),'utf8');
 const engineScript=await fs.readFile(new URL('../engine-settings.js',import.meta.url),'utf8');
-const tick=()=>new Promise(resolve=>setTimeout(resolve,25));
 const catalog=globalThis.KRA_MODEL_CATALOG;
 const target={target_id:'t0',start:0,end:2,surface:'경제',context:'경제',
  options:[{choice_id:'KEEP',type:'keep',replacement:'경제',entry_id:null,definitions:[]}]};
@@ -27,7 +24,7 @@ test('fresh engine defaults match the photographed switches; 1M is a separate de
  assert.equal(normalizeBatchContextTier(undefined),'1m');
  assert.equal(normalizeBatchContextTier('invalid'),'1m');
  assert.equal(normalizeBatchContextTier('32k'),'32k');
- assert.equal(new JSDOM(html).window.document.querySelector('#batchContextTier option:checked').value,'1m');
+ assert.match(html,/<option value="1m" selected data-engine-i18n="batch1m">1M<\/option>/);
  const previous=globalThis.chrome;
  try{
   globalThis.chrome={storage:{local:{get:async()=>({})}}};
@@ -46,30 +43,41 @@ test('explicit review-disabled profiles keep their legacy choice before reset',(
 });
 
 test('reset button changes only the 12 switches and leaves batch size, keys, logs, dictionary, profiles untouched',async()=>{
- const dom=new JSDOM(html);
+ const panel=html.match(/<section class="profile-panel engine-switch-panel"[\s\S]*?<\/section>/)?.[0];
+ assert.ok(panel,'the 12 switches belong to one scoped panel');
+ const ids=[...panel.matchAll(/<input id="([^"]+)" type="checkbox"/g)].map(x=>x[1]).sort();
+ assert.deepEqual(ids,Object.keys(ENGINE_SWITCH_DEFAULTS).sort());
+ assert.ok(!panel.includes('id="batchContextTier"'));
+ assert.match(panel,/id="resetEngineSwitches"/);
  const stored={
   enableModelReview:false,manualModelReview:false,smartSegmentation:false,
   batchContextTier:'128k',apiOutputTokenLimit:32768,manualOutputTokenLimit:131072,
   requestLoggingEnabled:true,requestLogs:[{id:'secret'}],
   profileStorage:{key:'not touched'},localApiKey:'do-not-reset',dictionary:'do-not-reset'
  };
- const context={
-  document:dom.window.document,console,ENGINE_SWITCH_DEFAULTS,engineSwitchValues,
-  normalizeBatchContextTier,readDictionaryInfo:async()=>({imported:true}),
-  chrome:{storage:{local:{get:async()=>({...stored}),set:async obj=>Object.assign(stored,obj)}}}
+ const controls=Object.fromEntries([...Object.keys(ENGINE_SWITCH_DEFAULTS),'resetEngineSwitches'].map(id=>[
+   id,{checked:false,disabled:false,addEventListener(event,callback){if(event==='click')this.click=callback}}
+ ]));
+ const patches=[];
+ const ctx={
+  $:id=>controls[id],ENGINE_SWITCH_DEFAULTS,importedDictionary:true,
+  status:{textContent:'original'},show:()=>{},t:()=> 'Restored',
+  chrome:{storage:{local:{set:async patch=>{
+   patches.push(Object.keys(patch).sort());Object.assign(stored,patch);
+  }}}}
  };
- vm.runInNewContext(engineScript.replace(/^import[^\n]*\n/gm,''),context);
- await tick();
- const root=dom.window.document.querySelector('.engine-switch-panel');
- assert.ok(root);
- assert.equal(root.querySelectorAll('input[type=checkbox]').length,12);
- assert.equal(root.contains(dom.window.document.getElementById('batchContextTier')),false);
- dom.window.document.getElementById('resetEngineSwitches').click();
- await tick();
+ const start=engineScript.indexOf("$('resetEngineSwitches').addEventListener('click',async()=>{");
+ const end=engineScript.indexOf("\n $('uiLocale').addEventListener",start);
+ assert.ok(start>0&&end>start,'bound the actual SRT reset handler');
+ vm.runInNewContext(engineScript.slice(start,end),ctx);
+ assert.equal(typeof controls.resetEngineSwitches.click,'function');
+ await controls.resetEngineSwitches.click();
+ assert.deepEqual(patches,[Object.keys(ENGINE_SWITCH_DEFAULTS).sort()]);
  for(const [key,value] of Object.entries(ENGINE_SWITCH_DEFAULTS)){
   assert.equal(stored[key],value,key);
-  assert.equal(dom.window.document.getElementById(key).checked,value,key);
+  assert.equal(controls[key].checked,value,key);
  }
+ assert.equal(controls.resetEngineSwitches.disabled,false);
  assert.equal(stored.batchContextTier,'128k');
  assert.equal(stored.apiOutputTokenLimit,32768);
  assert.equal(stored.manualOutputTokenLimit,131072);
@@ -77,7 +85,6 @@ test('reset button changes only the 12 switches and leaves batch size, keys, log
  assert.equal(stored.dictionary,'do-not-reset');
  assert.deepEqual(stored.requestLogs,[{id:'secret'}]);
  assert.deepEqual(stored.profileStorage,{key:'not touched'});
- dom.window.close();
 });
 
 test('official endpoints and region-dependent Tencent model inference are selectable',()=>{
