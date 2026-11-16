@@ -67,7 +67,7 @@ test('reset button changes only the 12 switches and leaves batch size, keys, log
   }}}}
  };
  const start=engineScript.indexOf("$('resetEngineSwitches').addEventListener('click',async()=>{");
- const end=engineScript.indexOf("\n $('uiLocale').addEventListener",start);
+ const end=engineScript.indexOf("$('uiLocale').addEventListener",start);
  assert.ok(start>0&&end>start,'bound the actual SRT reset handler');
  vm.runInNewContext(engineScript.slice(start,end),ctx);
  assert.equal(typeof controls.resetEngineSwitches.click,'function');
