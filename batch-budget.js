@@ -1,7 +1,8 @@
+import {DEFAULT_BATCH_CONTEXT_TIER} from './engine-defaults.js';
 import {buildReviewPayload,buildManualPrompt,buildReviewInstructions} from './review-payload.js';
 import {canProposeExperimentalOption} from './experimental-options.js';
 
-export const normalizeBatchContextTier=value=>['32k','128k','256k','512k','1m'].includes(value)?value:'32k';
+export const normalizeBatchContextTier=value=>['32k','128k','256k','512k','1m'].includes(value)?value:DEFAULT_BATCH_CONTEXT_TIER;
 // Editable planning/request limits, not a claim about a provider's real capacity.
 // The API limit controls max_tokens/max_completion_tokens/max_output_tokens;
 // the manual limit controls batching only (the chat UI has its own limits).
@@ -17,7 +18,7 @@ export function normalizeOutputTokenLimit(value,manual=false){
 // This is a multilingual byte heuristic, not any provider's exact tokenizer.
 export const estimateTokenCount=text=>Math.ceil(new TextEncoder().encode(text||'').length/3);
 const limits={'32k':32000,'128k':128000,'256k':256000,'512k':512000,'1m':1000000};
-export function describeBatchBudget(context,targets,{tier='32k',manual=false,wireIds=false,batchId='00000000',reviewPosFilter=true,experimentalHanja=false,experimentalLoanword=false,dictionaryFree=false,smartSegmentation=false,manualOutputTokenLimit=DEFAULT_MANUAL_OUTPUT_TOKENS,apiOutputTokenLimit=DEFAULT_API_OUTPUT_TOKENS,matchManualOutputBudget=false}={}){
+export function describeBatchBudget(context,targets,{tier=DEFAULT_BATCH_CONTEXT_TIER,manual=false,wireIds=false,batchId='00000000',reviewPosFilter=true,experimentalHanja=false,experimentalLoanword=false,dictionaryFree=false,smartSegmentation=false,manualOutputTokenLimit=DEFAULT_MANUAL_OUTPUT_TOKENS,apiOutputTokenLimit=DEFAULT_API_OUTPUT_TOKENS,matchManualOutputBudget=false}={}){
  tier=normalizeBatchContextTier(tier);
  const wire=wireIds?targets:targets.map((t,i)=>({...t,target_id:manual?'t'+i:'b0t'+i}));
  const experimental=experimentalHanja===true||experimentalLoanword===true;
@@ -48,7 +49,7 @@ export function describeBatchBudget(context,targets,{tier='32k',manual=false,wir
  return {tier,label:tier==='32k'?'32K':tier==='128k'?'128K':tier==='256k'?'256K':tier==='512k'?'512K':'1M',estimated:true,contextTokens,inputTokens,outputTokens,reservedOutputTokens,safetyTokens,outputLimit,requestedOutputTokens,matchManualOutputBudget:!manual&&matchManualOutputBudget,totalTokens,remainingTokens:contextTokens===null?null:contextTokens-totalTokens};
 }
 
-export function contextReviewBatches(items,context='',{tier='128k',manual=false,reviewPosFilter=true,experimentalHanja=false,experimentalLoanword=false,dictionaryFree=false,smartSegmentation=false,manualOutputTokenLimit=DEFAULT_MANUAL_OUTPUT_TOKENS,apiOutputTokenLimit=DEFAULT_API_OUTPUT_TOKENS,matchManualOutputBudget=false}={}){
+export function contextReviewBatches(items,context='',{tier=DEFAULT_BATCH_CONTEXT_TIER,manual=false,reviewPosFilter=true,experimentalHanja=false,experimentalLoanword=false,dictionaryFree=false,smartSegmentation=false,manualOutputTokenLimit=DEFAULT_MANUAL_OUTPUT_TOKENS,apiOutputTokenLimit=DEFAULT_API_OUTPUT_TOKENS,matchManualOutputBudget=false}={}){
  tier=normalizeBatchContextTier(tier);if(tier==='current')throw Error('Explicit context capacity required');
  const rows=items.flatMap(item=>item.result.unresolved.map(target=>({item,target}))),batches=[];
  const fits=budget=>budget.totalTokens<=budget.contextTokens&&budget.outputTokens<=budget.outputLimit;
