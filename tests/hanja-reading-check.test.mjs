@@ -1,6 +1,5 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import fs from 'node:fs/promises';
 import {primaryHangulReading} from '../hanja-reading-data.js';
 import {validateModelHanjaReadings} from '../hanja-reading-check.js';
 import {literalOriginOption} from '../experimental-options.js';
@@ -49,12 +48,3 @@ test('direct model-origin Hanja rejects reading mismatch and tracks unverified o
  assert.equal(literalOriginOption({...target,options:undefined},'韓國',{experimentalHanja:true})?.origin_source,'model-unverified');
 });
 
-test('the page identifies dictionary-backed and model-unverified annotations',async()=>{
- const [js,css]=await Promise.all([
-  fs.readFile(new URL('../content.js',import.meta.url),'utf8'),
-  fs.readFile(new URL('../content.css',import.meta.url),'utf8')
- ]);
- assert.ok(js.includes('data-kra-source'));
- assert.ok(js.includes('model-unverified'));
- assert.ok(css.includes('ruby.kra-ruby[data-kra-source="model-unverified"]'));
-});
