@@ -47,7 +47,9 @@ test('review validation requires only unreplaced originals, not retired target o
  assert.equal(scanned.unresolved.length,0);
 });
 test('failed repair never retires original target; a normal old result remains valid fallback',async()=>{
- const text='과학이야기',t=word('t0',text,0,text.length),f=fixture(text,[t]);
+ const text='과학이야기',t=word('t0',text,0,text.length);
+ t.options[1].replacement='科學이야기'; // Valid word stem + unchanged native portion.
+ const f=fixture(text,[t]);
  const bad=replace(f.sid,'t0',0,2,'과학','韓國');
  const check=await reviewTargets({...f.config,enableModelReview:true,
   request:async()=>({results:[],repairs:[bad]})},[t]);

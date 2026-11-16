@@ -75,7 +75,10 @@ test('API sends results-only protocol and configurable max_tokens (DeepSeek)',as
    apiOutputTokenLimit:32000,logger:{start:async()=>1,finish:async()=>{}}},[target0]);
   assert.equal(result.accepted.length,1);
   assert.equal(result.accepted[0].option.replacement,'原潛');
-  assert.equal(wire.max_tokens,32000);
+  assert.equal(wire.max_tokens,describeBatchBudget('',[target0],{
+   tier:'32k',manual:false,wireIds:true,experimentalHanja:true,
+   apiOutputTokenLimit:32000}).requestedOutputTokens);
+  assert.ok(wire.max_tokens<=32000);
   assert.ok(!wire.messages[0].content.includes('"experimental_options":['));
   assert.equal(JSON.parse(wire.messages[1].content).experimental_modes,undefined);
   assert.ok(wire.messages[0].content.includes('genuine Hanja spelling'));
@@ -104,7 +107,10 @@ test('OpenAI Chat/Responses and Anthropic use the correct configured output limi
    const res=await reviewTargets({enableModelReview:true,...item,model:'fixture',
     batchBudget:{outputLimit:44444},logger:{start:async()=>1,finish:async()=>{}}},[target0]);
    assert.equal(res.accepted.length,1,item.provider);
-   assert.equal(wire[item.name],44444,item.endpoint);
+   assert.equal(wire[item.name],describeBatchBudget('',[target0],{
+    tier:'32k',manual:false,wireIds:true,apiOutputTokenLimit:44444
+   }).requestedOutputTokens,item.endpoint);
+   assert.ok(wire[item.name]<=44444,item.endpoint);
    assert.ok(!Object.hasOwn(wire,item.name==='max_tokens'?'max_completion_tokens':'max_tokens'),'no conflicting cap property');
   }
  }finally{globalThis.fetch=saved;}
