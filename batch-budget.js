@@ -17,7 +17,7 @@ export function normalizeOutputTokenLimit(value,manual=false){
 // This is a multilingual byte heuristic, not any provider's exact tokenizer.
 export const estimateTokenCount=text=>Math.ceil(new TextEncoder().encode(text||'').length/3);
 const limits={'32k':32000,'128k':128000,'256k':256000,'512k':512000,'1m':1000000};
-export function describeBatchBudget(context,targets,{tier='32k',manual=false,wireIds=false,batchId='00000000',reviewPosFilter=true,experimentalHanja=false,experimentalLoanword=false,dictionaryFree=false,smartSegmentation=false,manualOutputTokenLimit=DEFAULT_MANUAL_OUTPUT_TOKENS,apiOutputTokenLimit=DEFAULT_API_OUTPUT_TOKENS}={}){
+export function describeBatchBudget(context,targets,{tier='32k',manual=false,wireIds=false,batchId='00000000',reviewPosFilter=true,experimentalHanja=false,experimentalLoanword=false,dictionaryFree=false,smartSegmentation=false,manualOutputTokenLimit=DEFAULT_MANUAL_OUTPUT_TOKENS,apiOutputTokenLimit=DEFAULT_API_OUTPUT_TOKENS,matchManualOutputBudget=false}={}){
  tier=normalizeBatchContextTier(tier);
  const wire=wireIds?targets:targets.map((t,i)=>({...t,target_id:manual?'t'+i:'b0t'+i}));
  const experimental=experimentalHanja===true||experimentalLoanword===true;
@@ -33,12 +33,22 @@ export function describeBatchBudget(context,targets,{tier='32k',manual=false,wir
    start:t.start,end:t.end,surface:t.surface.slice(0,24),choice_id:'漢字詞源'
   }))}:{})});
  const contextTokens=limits[tier],inputTokens=estimateTokenCount(input)+(manual?0:64),outputTokens=Math.ceil(estimateTokenCount(reply)*1.1)+32;
- const safetyTokens=contextTokens?Math.ceil(contextTokens*.08)+1024:0,outputLimit=normalizeOutputTokenLimit(manual?manualOutputTokenLimit:apiOutputTokenLimit,manual);
- const reservedOutputTokens=manual?outputTokens:Math.max(outputTokens,outputLimit),totalTokens=inputTokens+reservedOutputTokens+safetyTokens;
- return {tier,label:tier==='32k'?'32K':tier==='128k'?'128K':tier==='256k'?'256K':tier==='512k'?'512K':'1M',estimated:true,contextTokens,inputTokens,outputTokens,reservedOutputTokens,safetyTokens,outputLimit,totalTokens,remainingTokens:contextTokens===null?null:contextTokens-totalTokens};
+ const safetyTokens=contextTokens?Math.ceil(contextTokens*.08)+1024:0;
+ // The API can use the manual planner's ceiling, but never claim that the
+ // provider actually supports it. The explicit API ceiling remains available.
+ const effectiveApiLimit=matchManualOutputBudget?manualOutputTokenLimit:apiOutputTokenLimit;
+ const outputLimit=normalizeOutputTokenLimit(manual?manualOutputTokenLimit:effectiveApiLimit,manual);
+ // Ask only for what the current reply is likely to require, with generous
+ // completion/reasoning slack, instead of reserving the entire configured cap.
+ // The request uses this same number as max(_completion/_output)_tokens.
+ const requestedOutputTokens=manual?null:Math.min(outputLimit,
+  Math.max(Math.min(outputLimit,DEFAULT_API_OUTPUT_TOKENS),Math.ceil(outputTokens*1.7)+4096));
+ const reservedOutputTokens=manual?outputTokens:requestedOutputTokens;
+ const totalTokens=inputTokens+reservedOutputTokens+safetyTokens;
+ return {tier,label:tier==='32k'?'32K':tier==='128k'?'128K':tier==='256k'?'256K':tier==='512k'?'512K':'1M',estimated:true,contextTokens,inputTokens,outputTokens,reservedOutputTokens,safetyTokens,outputLimit,requestedOutputTokens,matchManualOutputBudget:!manual&&matchManualOutputBudget,totalTokens,remainingTokens:contextTokens===null?null:contextTokens-totalTokens};
 }
 
-export function contextReviewBatches(items,context='',{tier='128k',manual=false,reviewPosFilter=true,experimentalHanja=false,experimentalLoanword=false,dictionaryFree=false,smartSegmentation=false,manualOutputTokenLimit=DEFAULT_MANUAL_OUTPUT_TOKENS,apiOutputTokenLimit=DEFAULT_API_OUTPUT_TOKENS}={}){
+export function contextReviewBatches(items,context='',{tier='128k',manual=false,reviewPosFilter=true,experimentalHanja=false,experimentalLoanword=false,dictionaryFree=false,smartSegmentation=false,manualOutputTokenLimit=DEFAULT_MANUAL_OUTPUT_TOKENS,apiOutputTokenLimit=DEFAULT_API_OUTPUT_TOKENS,matchManualOutputBudget=false}={}){
  tier=normalizeBatchContextTier(tier);if(tier==='current')throw Error('Explicit context capacity required');
  const rows=items.flatMap(item=>item.result.unresolved.map(target=>({item,target}))),batches=[];
  const fits=budget=>budget.totalTokens<=budget.contextTokens&&budget.outputTokens<=budget.outputLimit;
@@ -47,7 +57,7 @@ export function contextReviewBatches(items,context='',{tier='128k',manual=false,
   const evaluate=count=>{
    if(memo.has(count))return memo.get(count);
    const group=rows.slice(start,start+count),ownContext=[...new Set(group.map(r=>r.target.context))].join('\n');
-   const budget=describeBatchBudget(ownContext,group.map(r=>r.target),{tier,manual,reviewPosFilter,experimentalHanja,experimentalLoanword,dictionaryFree,smartSegmentation,manualOutputTokenLimit,apiOutputTokenLimit}),value={rows:group,items:[...new Set(group.map(r=>r.item))],context:ownContext,budget};memo.set(count,value);return value;
+   const budget=describeBatchBudget(ownContext,group.map(r=>r.target),{tier,manual,reviewPosFilter,experimentalHanja,experimentalLoanword,dictionaryFree,smartSegmentation,manualOutputTokenLimit,apiOutputTokenLimit,matchManualOutputBudget}),value={rows:group,items:[...new Set(group.map(r=>r.item))],context:ownContext,budget};memo.set(count,value);return value;
   };
   if(!fits(evaluate(1).budget))throw Error(`单个待选词及其完整上下文/释义超出 ${evaluate(1).budget.label} 输入或答案预算；请选更大档位或缩小文本范围。`);
   const remaining=rows.length-start;let low=1,high=remaining;
@@ -61,7 +71,7 @@ export function contextReviewBatches(items,context='',{tier='128k',manual=false,
   batch.budget.limitReason=next?(next.outputTokens>next.outputLimit?'output':'context'):'end';
   // Page-wide context is optional; every occurrence's actual sentence is mandatory.
   if(context&&context.length<=batch.budget.contextTokens*3){
-   const full=describeBatchBudget(context,batch.rows.map(r=>r.target),{tier,manual,reviewPosFilter,experimentalHanja,experimentalLoanword,dictionaryFree,smartSegmentation,manualOutputTokenLimit,apiOutputTokenLimit});
+   const full=describeBatchBudget(context,batch.rows.map(r=>r.target),{tier,manual,reviewPosFilter,experimentalHanja,experimentalLoanword,dictionaryFree,smartSegmentation,manualOutputTokenLimit,apiOutputTokenLimit,matchManualOutputBudget});
    if(fits(full)){batch.context=context;batch.budget={...full,limitReason:batch.budget.limitReason};}
   }
   batches.push(batch);start+=low;

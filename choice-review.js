@@ -1,4 +1,5 @@
 import {filterReviewTarget,filterReviewTargets} from './review-pos.js';
+import {readingCompatibleModelChoice} from './review-reading-safety.js';
 import {qwenRequestSettings} from './qwen-api.js';
 import {readModelContent,choicePreviewParser,experimentalChoicePreviewParser} from './model-stream.js';
 import {requestLogger} from './request-log.js';
@@ -6,7 +7,8 @@ import './model-catalog.js';
 import {buildReviewPayload,buildReviewInstructions} from './review-payload.js';
 import {literalOriginOption,explainLiteralOriginRejection} from './experimental-options.js';
 import {validateSegmentationRepairs} from './segmentation-repairs.js';
-import {normalizeOutputTokenLimit} from './batch-budget.js';
+import {normalizeOutputTokenLimit,describeBatchBudget} from './batch-budget.js';
+import {requestTimeoutGuard} from './request-timeout.js';
 // Response rows have one wire format only: {t, c}. The special null
 // c means keep the source. A string "KEEP" is NOT a fallback marker.
 function validWireRow(row,known){
@@ -25,11 +27,12 @@ function matchedWireOption(target,value,config){
  if(!selected&&typeof value==='string'&&target.dictionary_person_name===true&&
     target.verified_person_hanja?.includes(value)){
   const matched=options.find(o=>o.type==='hanja'&&o.replacement===value&&o.entry_id!=null);
-  if(matched)return matched;
+  if(matched&&readingCompatibleModelChoice(target,matched,config))return matched;
  }
  // A nonexistent numbered dictionary option means no conversion, in both
  // ordinary and experimental modes. Authentic literal origins remain distinct.
- if(selected)return selected;
+ if(selected)return readingCompatibleModelChoice(target,selected,config)?selected:
+  options.find(o=>o.type==='keep')||null;
  return typeof value==='string'&&/^[cn]\d+$/u.test(value)?
   options.find(o=>o.type==='keep')||null:null;
 }
@@ -45,7 +48,12 @@ export function validateChoices(targets,response,config={}){
   // A uniquely identified result with an unusable choice is safe to leave
   // untouched. Structural problems (unknown/duplicate/missing t) are not.
   const option=matches.length===1?matchedWireOption(target,matches[0].c,config)||target.options.find(o=>o.type==='keep'):null;
-  if(option)accepted.push({target,option});else unresolved.push(target);
+  if(option){
+   // Previous diagnostics counted invalid c/n keys as ordinary KEEP.
+   // Preserve the safe null fallback, but disclose its actual frequency.
+   const invalidChoiceFallback=matches[0].c!==null&&option.type==='keep';
+   accepted.push(invalidChoiceFallback?{target,option,invalidChoiceFallback:true}:{target,option});
+  }else unresolved.push(target);
  }
  return {accepted,unresolved};
 }
@@ -109,12 +117,18 @@ export async function reviewTargets(config,targets,signal){
  let pending=targets,accepted=[],errors=[];
  const notify=event=>config.onDiagnostic?.({...event,message:safeDetail(event.message,config),detail:safeDetail(event.detail,config)});
  const thinking=thinkingSettings(config);
- for(let attempt=0;attempt<(config.smartSegmentation===true?1:2) && pending.length;attempt++){
+ // Manual input has its own validation and retry UI. API requests adaptively
+ // reduce target count after an incomplete response, timeout, or network drop.
+ const manual=config.manualReview===true,smart=config.smartSegmentation===true;
+ const maxRequests=manual?2:smart?4:Math.min(16,Math.max(8,Math.ceil(targets.length/96)*3));
+ let windowSize=targets.length,failStreak=0;
+ for(let attempt=0;attempt<maxRequests && pending.length;attempt++){
   signal?.throwIfAborted();
+  const current=manual||smart?pending:pending.slice(0,windowSize);
   config.onPreview?.([]);
-  notify({stage:'request',level:'info',attempt:attempt+1,model:config.model,thinking:thinking.label,message:`正在请求模型审核：${pending.length} 个候选；${thinking.label}`});
+  notify({stage:'request',level:'info',attempt:attempt+1,model:config.model,thinking:thinking.label,
+   message:`模型审核第 ${attempt+1}/${maxRequests} 次请求：本次 ${current.length} 个，尚余 ${pending.length} 个；${thinking.label}`});
   try {
-   const current=pending;
    const wire=modelTargets(current,config);
    const response=await (config.request || requestChoices)({...config,attempt:attempt+1},wire,signal);
    const experimental=config.experimentalHanja===true||config.experimentalLoanword===true;
@@ -136,9 +150,17 @@ export async function reviewTargets(config,targets,signal){
    const result=badId?
      {accepted:[],unresolved:active,experimentalAccepted:0,experimentalRejected:0}:
      experimental?validateExperimentalChoices(active,choiceResponse,config):validateChoices(active,choiceResponse,config);
-   accepted.push(...result.accepted);pending=result.unresolved;config.onAccepted?.(result.accepted);
+   accepted.push(...result.accepted);
+   const incomplete=new Set(result.unresolved.map(t=>t.target_id));
+   const submitted=new Set(current.map(t=>t.target_id));
+   pending=pending.filter(t=>!submitted.has(t.target_id)||incomplete.has(t.target_id));
+   await config.onAccepted?.(result.accepted);
+   if(result.accepted.length||repair.accepted.length)failStreak=0;
+   else failStreak++;
+   if(!manual&&!smart&&incomplete.size)
+    windowSize=Math.max(1,Math.ceil(current.length/2));
    if(config.smartSegmentation===true){
-    config.onRepairs?.(repair.accepted);
+    await config.onRepairs?.(repair.accepted);
     config.onRepairRejected?.(repair.rejected.length);
     const corrected=repair.accepted.filter(r=>r.offset_corrected===true).length;
     config.onRepairOffsetCorrected?.(corrected);
@@ -151,21 +173,52 @@ export async function reviewTargets(config,targets,signal){
    if(experimental)notify({stage:'experimental',level:result.experimentalRejected?'warning':'info',message:`单次回复：直接词源标注 ${result.experimentalAccepted} 项、拒绝无效直接词源 ${result.experimentalRejected} 项。`,detail:result.experimentalRejected?JSON.stringify({reasons:result.rejectionCounts,samples:result.rejectionSamples}):''});
    notify({stage:'response',level:pending.length?'warning':'info',message:`模型返回：采纳 ${result.accepted.length} 项，未解决 ${pending.length} 项`,detail:pending.length?JSON.stringify(response):''});
   }catch(error){
+   // A stream can be interrupted after many COMPLETE, individually valid
+   // t/c objects. Keep those decisions and retry only the missing targets.
+   // Never accept an unfinished row, duplicate ID or an unchecked literal.
+   if(!signal?.aborted&&Array.isArray(error.partialAccepted)&&error.partialAccepted.length){
+    const stillPending=new Map(pending.map(t=>[t.target_id,t]));
+    const committed=[],seen=new Set();
+    for(const row of error.partialAccepted){
+     const id=row?.target?.target_id;
+     if(!stillPending.has(id)||seen.has(id)||!row?.option)continue;
+     seen.add(id);committed.push({target:stillPending.get(id),option:row.option});
+    }
+    if(committed.length){
+     accepted.push(...committed);
+     pending=pending.filter(t=>!seen.has(t.target_id));
+     await config.onAccepted?.(committed);
+     notify({stage:'partial',level:'warning',message:`API 流中断：已安全保留 ${committed.length} 条完整有效答案；其余 ${pending.length} 条仍待重试。`});
+    }
+   }
    config.onPreview?.([]);
    if(signal?.aborted)throw error;
    const message=error.name==='TimeoutError'?'模型请求超时；已保留本地结果':error instanceof TypeError?'模型网络请求失败；请检查接口地址、API 域名权限与网络':error.message;
-   const diagnostic={stage:'error',level:'error',attempt:attempt+1,message:safeDetail(message,config),detail:safeDetail(error.detail,config)};
+   const diagnostic={stage:'error',level:'error',attempt:attempt+1,message:safeDetail(message,config),detail:safeDetail(error.detail,config),permanent:error.permanent===true};
    errors.push(diagnostic);notify(diagnostic);
    if(error.permanent)break;
+   failStreak++;
+   if(!manual&&!smart&&current.length>1){
+    windowSize=Math.max(1,Math.ceil(current.length/2));
+    notify({stage:'retry',level:'warning',attempt:attempt+1,
+     message:`请求失败，下一次缩小到最多 ${windowSize} 个目标，已完成答案不会重发。`});
+   }
+   if(failStreak>=5||current.length===1&&failStreak>=3)break;
+   const delay=config.request?0:Math.min(6000,750*2**Math.min(failStreak,3));
+   if(delay){await new Promise(resolve=>setTimeout(resolve,delay));signal?.throwIfAborted();}
   }
  }
+ if(pending.length)notify({stage:'incomplete',level:'warning',
+  message:`仍有 ${pending.length} 个审核目标未完成。已保留所有有效答案，不能将本轮视为完整成功。`});
  return {accepted,unresolved:pending,errors};
 }
 async function requestChoices(config,targets,signal){
  const provider=config.provider||globalThis.KRA_MODEL_CATALOG.inferProvider(config.endpoint);
  const native=provider==='openai'||provider==='anthropic';
- const timeout=AbortSignal.timeout(config.timeoutMs || (native||provider==='qwen'?120000:20000));
- const requestSignal=signal?AbortSignal.any([signal,timeout]):timeout;
+ const guard=requestTimeoutGuard({signal,
+  hardMs:config.timeoutMs || 600000,
+  idleMs:config.stream===true?180000:(config.timeoutMs||600000)});
+ const requestSignal=guard.signal;
  const {payload,stats:payloadStats}=buildReviewPayload(config.context,targets,config);
  config.onDiagnostic?.({stage:'request',level:'info',message:`共享请求：${payloadStats.targets} 个词，${payloadStats.sentences} 份句子，${payloadStats.candidates} 个候选；用户输入 ${payloadStats.legacyUserBytes} → ${payloadStats.userBytes} 字节。`});
  let body={model:config.model,messages:[
@@ -173,7 +226,16 @@ async function requestChoices(config,targets,signal){
   {role:'user',content:JSON.stringify(payload)}],response_format:{type:'json_object'},...thinkingSettings(config).body};
  if(provider==='qwen'){delete body.response_format;Object.assign(body,qwenRequestSettings(config));}
  const responses=provider==='openai'&&/\/responses\/?$/.test(new URL(config.endpoint).pathname);
- const outputTokenLimit=normalizeOutputTokenLimit(config.batchBudget?.outputLimit??config.apiOutputTokenLimit,false);
+ const requestedCap=config.apiOutputTokenLimit??config.batchBudget?.outputLimit;
+ const requestBudget=describeBatchBudget(config.context||'',targets,{
+  tier:config.batchContextTier||'32k',wireIds:true,manual:false,
+  reviewPosFilter:config.reviewPosFilter,experimentalHanja:config.experimentalHanja,
+  experimentalLoanword:config.experimentalLoanword,dictionaryFree:config.dictionaryFree,
+  smartSegmentation:config.smartSegmentation,manualOutputTokenLimit:config.manualOutputTokenLimit,
+  apiOutputTokenLimit:requestedCap,
+  matchManualOutputBudget:config.matchManualOutputBudget===true
+ });
+ const outputTokenLimit=normalizeOutputTokenLimit(requestBudget.requestedOutputTokens,false);
  if(responses){
   const {messages,reasoning_effort}=body;
   body={model:config.model,input:messages,store:false,
@@ -193,25 +255,40 @@ async function requestChoices(config,targets,signal){
  const logger=config.logger||requestLogger;
  const started=Date.now(),secrets=[config.apiKey,config.engineToken].filter(Boolean);
  const headers={'Content-Type':'application/json',...auth};
- const record={startedAt:new Date(started).toISOString(),endpoint:config.endpoint,provider,model:config.model,operationId:config.operationId,attempt:config.attempt||1,stream:body.stream===true,payloadStats,batchBudget:config.batchBudget,headers,body};
+ const record={startedAt:new Date(started).toISOString(),endpoint:config.endpoint,provider,model:config.model,operationId:config.operationId,attempt:config.attempt||1,stream:body.stream===true,payloadStats,batchBudget:{...config.batchBudget,requestOutputTokens:outputTokenLimit},headers,body};
  const logId=await logger.start(record,secrets);
- let raw='',rawTruncated=false,status,firstByteMs,metadata={},responseHeaders={};
- const onRaw=chunk=>{if(chunk&&firstByteMs===undefined)firstByteMs=Date.now()-started;if(raw.length+chunk.length>1_500_000)rawTruncated=true;raw+=(chunk.slice(0,Math.max(0,1_500_000-raw.length)));};
+ let raw='',rawTruncated=false,status,firstByteMs,metadata={},responseHeaders={},latestPreview=[];
+ const onRaw=chunk=>{if(chunk)guard.activity();if(chunk&&firstByteMs===undefined)firstByteMs=Date.now()-started;
+   // Full wire response is retained only when the user enables request logging.
+   // A disabled logger still uses the old bounded diagnostic buffer.
+   if(logId){raw+=chunk;return;}
+   if(raw.length+chunk.length>1_500_000)rawTruncated=true;
+   raw+=chunk.slice(0,Math.max(0,1_500_000-raw.length));};
  const onMetadata=data=>{if(data.id)metadata.id=data.id;if(data.usage)metadata.usage={...metadata.usage,...data.usage};if(data.stop_reason)metadata.finishReason=data.stop_reason;if(data.choices?.[0]?.finish_reason)metadata.finishReason=data.choices[0].finish_reason;};
  try{
   const response=await fetch(config.endpoint,{method:'POST',headers,body:JSON.stringify(body),signal:requestSignal});
+  guard.activity();
   status=response.status;responseHeaders=Object.fromEntries(['content-type','x-request-id','request-id','retry-after'].map(name=>[name,response.headers.get(name)]).filter(([,v])=>v));
   if(!response.ok){const detail=await response.text();onRaw(detail);const error=Error(`模型 API HTTP ${response.status}`);error.detail=detail;error.permanent=response.status>=400&&response.status<500&&![408,429].includes(response.status);throw error;}
   // Streamed literal origins are validated per complete result before preview.
-  const preview=!config.onPreview?()=>{}:(config.experimentalHanja||config.experimentalLoanword)?experimentalChoicePreviewParser(targets,config,config.onPreview):choicePreviewParser(targets,config.onPreview);
+  const previewCallback=accepted=>{latestPreview=accepted;config.onPreview?.(accepted);};
+  const preview=(config.experimentalHanja||config.experimentalLoanword)?
+    experimentalChoicePreviewParser(targets,config,previewCallback):
+    choicePreviewParser(targets,previewCallback);
   const content=await readModelContent(response,{protocol:responses?'responses':provider==='anthropic'?'anthropic':'chat',signal:requestSignal,maxContentChars:Math.min(16_000_000,Math.max(2_000_000,outputTokenLimit*8)),onRaw,onMetadata,onDelta:preview,onStarted:()=>config.onDiagnostic?.({stage:'response',level:'info',message:'已收到模型流式响应，正在接收审核结果。'})});
   let result;try{if(typeof content!=='string'||!content.trim())throw Error('empty');result=JSON.parse(content.trim().replace(/^```(?:json)?\s*/i,'').replace(/\s*```$/,''));}
   catch{const error=Error('模型最终回复为空、非 JSON 或不符合候选 ID 协议');error.detail=content||raw;throw error;}
   const checked=(config.experimentalHanja||config.experimentalLoanword)?validateExperimentalChoices(targets,result,config):validateChoices(targets,result,config);
-  await logger.finish(logId,{status,responseHeaders,finishedAt:new Date().toISOString(),elapsedMs:Date.now()-started,firstByteMs,validation:{accepted:checked.accepted.length,unresolved:checked.unresolved.length},response:{raw,truncated:rawTruncated,...metadata}},secrets);
+  await logger.finish(logId,{status,responseHeaders,finishedAt:new Date().toISOString(),elapsedMs:Date.now()-started,firstByteMs,validation:{accepted:checked.accepted.length,unresolved:checked.unresolved.length},response:{raw,truncated:rawTruncated,parsed:result,...metadata}},secrets);
   return result;
  }catch(error){
-  await logger.finish(logId,{status,responseHeaders,finishedAt:new Date().toISOString(),elapsedMs:Date.now()-started,firstByteMs,response:{raw,truncated:rawTruncated,...metadata},error:{name:error.name,message:error.message,detail:error.detail||''}},secrets);
+  // Only completed and validated stream rows can be salvaged. Request-level
+  // failure still remains visible in diagnostics and logs; this is not
+  // interpreted as a successful full model reply.
+  if(latestPreview.length)error.partialAccepted=latestPreview;
+  await logger.finish(logId,{status,responseHeaders,finishedAt:new Date().toISOString(),elapsedMs:Date.now()-started,firstByteMs,response:{raw,truncated:rawTruncated,...metadata},error:{name:error.name,message:error.message,detail:error.detail||''},partialRows:latestPreview.length},secrets);
   throw error;
+ }finally{
+  guard.cleanup();
  }
 }
