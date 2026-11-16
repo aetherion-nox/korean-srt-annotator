@@ -1,4 +1,5 @@
 import {projectAnnotation} from './local-engine.js';
+import {extractInlineHanjaPairs} from './inline-hanja-evidence.js';
 import {splitText} from './text-chunks.js';
 
 const HANGUL=/[가-힣ㄱ-ㅎㅏ-ㅣ]/u;
@@ -71,6 +72,10 @@ export function parseSrt(source,{filterUntimedLines=true}={}){
     }
    };
    const protectedRanges=[...line.text.matchAll(PROTECTED)].map(m=>({start:m.index,end:m.index+m[0].length}));
+   // Treat author-supplied Hangul(漢字) as a source-evidence sentence. Keep
+   // Latin-origin parentheses protected as in previous SRT versions.
+   const authorPairs=extractInlineHanjaPairs(line.text);
+   for(const pair of authorPairs)protectedRanges.push({start:pair.start,end:pair.parenthesisEnd});
    for(const match of line.text.matchAll(/[가-힣]+\(/gu)){
     const open=match.index+match[0].length-1;let depth=1,end=open+1;
     for(;end<line.text.length&&depth;end++){if(line.text[end]==='(')depth++;if(line.text[end]===')')depth--;}
@@ -80,11 +85,12 @@ export function parseSrt(source,{filterUntimedLines=true}={}){
    let at=0;
    for(const range of protectedRanges.sort((a,b)=>a.start-b.start)){if(range.start>at)add(at,range.start);at=Math.max(at,range.end);}
    add(at,line.text.length);
+   for(const pair of authorPairs)runs.push({start:line.start+pair.start,end:line.start+pair.parenthesisEnd});
   }
   // Join only contiguous Korean dialogue within this cue. Keep the exact source
   // (including CRLF/indentation), so results still map straight back to SRT.
   const merged=[];
-  for(const run of runs){
+  for(const run of runs.sort((a,b)=>a.start-b.start||a.end-b.end)){
    const previous=merged.at(-1),gap=previous?source.slice(previous.end,run.start):'';
    if(previous&&/^[\s.,!?…，。！？、:;'"“”‘’·\-–—~〜]*$/u.test(gap))previous.end=run.end;
    else merged.push({...run});
@@ -109,10 +115,15 @@ function loanwordDisplay(value) {
  for(const sentence of document.sentences){
   if(!Number.isInteger(sentence.start)||sentence.start<0||document.source.slice(sentence.start,sentence.start+sentence.text.length)!==sentence.text)throw Error('SRT 原文与分析位置不一致，已停止导出。');
   const annotations=results.get(sentence.id)||[],seen=new Set();
+  const existingAuthorHanja=extractInlineHanjaPairs(sentence.text);
   for(const raw of annotations)for(const a of projectAnnotation(sentence.text,raw)){
    const signature=JSON.stringify([a.start,a.end,a.surface,a.replacement,a.type]);
    if(seen.has(signature))continue;seen.add(signature);
    if(!HANGUL.test(a.surface))throw Error('标注必须对应原韩语。');
+   // SRT has inline bracket notation rather than ruby. Do not turn the
+   // author's 박의산(朴懿山) into 朴懿山(박의산)(朴懿山). Keep the
+   // original evidence while letting the glossary help later occurrences.
+   if(a.type==='hanja'&&existingAuthorHanja.some(p=>p.start===a.start&&p.end===a.end&&p.hanja===a.replacement))continue;
    const display=a.type==='loanword'?loanwordDisplay(a.replacement):a.replacement;
    if(a.type==='loanword'&&!display)continue;
    const text=a.type==='loanword'?`${a.surface}(${display})`:`${display}(${a.surface})`;

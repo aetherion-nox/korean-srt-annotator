@@ -78,7 +78,7 @@ function runBatch(sentences,modes,progressiveAnnotation,offset,total,settings){
     if(event.type==='RESULTS'){
      mergeSrtResults(results,event);$('progress').value=(offset+(event.completedSentences||0))/total*100;
      report(`分析韩语 ${offset+(event.completedSentences||0)} / ${total} 段${event.source==='model'?' · 模型结果已返回':''}`);if(progressiveAnnotation)schedulePreview();
-    }else if(event.type==='LOCAL_PROGRESS'){report(event.stage==='dictionary'?'加载词典…':event.stage==='tokenizer'?'初始化分词器…':`正在分析第 ${offset+event.currentSentence}/${total} 段（${event.sentenceCharacters} 字符）`);}
+    }else if(event.type==='LOCAL_PROGRESS'){report(event.stage==='dictionary'?'加载词典…':event.stage==='tokenizer'?'初始化分词器…':event.stage?.startsWith('analysis')?`正在分析第 ${Math.min(total,offset+(event.currentSentence||0))}/${total} 段（${event.sentenceCharacters||event.paragraphCharacters||0} 字符）`:'正在准备标注…');}
     else if(event.type==='MODEL_PROGRESS')report(event.modelTotal?`模型审核 ${event.modelCompleted||0} / ${event.modelTotal}`:'本批无需模型审核。');
     else if(event.type==='DIAGNOSTIC')log(`${event.diagnostic?.message||''}${event.diagnostic?.detail?' '+event.diagnostic.detail:''}`);
     else if(event.type==='MANUAL_REVIEW_REQUEST'){

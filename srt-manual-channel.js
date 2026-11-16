@@ -1,6 +1,6 @@
 import {runSentencePipeline} from './annotation-pipeline.js';
 import {createManualReviewSession} from './manual-review.js';
-import {engineStatus,analyzeLocal} from './local-engine.js';
+import {engineStatus,analyzeLocal,analyzeLocalBatch} from './local-engine.js';
 
 // Human-paced review belongs to the visible workspace. The background is used
 // only for short dictionary requests, so its suspension cannot expire a batch.
@@ -29,7 +29,8 @@ export function createSrtManualChannel(settings){
     enabled:settings.enableModelReview,
     status:(signal,progress)=>engineStatus(signal,progress,{allowNoDictionary}),
     analyze:(text,modes,signal,progress)=>analyzeLocal(text,{...modes,allowNoDictionary},signal,progress),
-    modelConfig:async()=>({provider:'manual',model:'manual-chat',endpoint:'manual://chat',manualReview:true,request:session.request,batchContextTier:settings.batchContextTier,manualOutputTokenLimit:settings.manualOutputTokenLimit,apiOutputTokenLimit:settings.apiOutputTokenLimit,reviewPosFilter:settings.reviewPosFilter,experimentalHanja:settings.experimentalHanja,experimentalLoanword:settings.experimentalLoanword,hanjaReadingCheck:settings.hanjaReadingCheck,smartSegmentation:settings.smartSegmentation})
+    analyzeBatch:(texts,modes,signal,progress)=>analyzeLocalBatch(texts,{...modes,allowNoDictionary},signal,progress),
+    modelConfig:async()=>({provider:'manual',model:'manual-chat',endpoint:'manual://chat',manualReview:true,request:session.request,batchContextTier:settings.batchContextTier,manualOutputTokenLimit:settings.manualOutputTokenLimit,apiOutputTokenLimit:settings.apiOutputTokenLimit,matchManualOutputBudget:settings.matchManualOutputBudget,reviewPosFilter:settings.reviewPosFilter,experimentalHanja:settings.experimentalHanja,experimentalLoanword:settings.experimentalLoanword,hanjaReadingCheck:settings.hanjaReadingCheck,smartSegmentation:settings.smartSegmentation})
    }).catch(error=>{if(!controller.signal.aborted)post({type:'ERROR',operationId,error:error.message});});
   }
  };
