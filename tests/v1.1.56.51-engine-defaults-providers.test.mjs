@@ -105,7 +105,7 @@ test('reasoning flags are provider specific and do not inject unsupported thinki
  assert.deepEqual(thinkingSettings({provider:'muse',model:'muse-spark-1.3',disableThinking:true,reasoningEffort:'max'}).body,{reasoning_effort:'max'});
  assert.deepEqual(thinkingSettings({provider:'hunyuan',model:'hy4',disableThinking:true}).body,{thinking:{type:'disabled'},reasoning_effort:'no_think'});
  assert.deepEqual(thinkingSettings({provider:'hunyuan',model:'hy4',disableThinking:false}).body,{thinking:{type:'enabled'},reasoning_effort:'high'});
- assert.deepEqual(thinkingSettings({provider:'hunyuan',model:'hy4-flash',disableThinking:true}).body,{thinking:{type:'disabled'}});
+ assert.deepEqual(thinkingSettings({provider:'hunyuan',model:'hy4-flash',disableThinking:true}).body,{thinking:{type:'disabled'},reasoning_effort:'no_think'});
 });
 
 test('Gemini, Muse and Tencent request adapters accept nonstreamed and SSE model replies',async()=>{

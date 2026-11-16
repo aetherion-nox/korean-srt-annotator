@@ -104,8 +104,8 @@ export function thinkingSettings(config){
   const level=enabled?effort:'none';
   return {body:{reasoning_effort:level},label:enabled?`思考强度：${level}`:'关闭思考'};
  }
- // TokenHub officially supports thinking.type enabled/disabled. For Hy4/Hy3
- // the optional reasoning_effort is high/low or no_think (never OpenAI "none").
+ // Tencent TokenHub supports explicit thinking toggles for Hy4 Flash, Hy4,
+ // Hy4 Preview and Hy3. Hy3 accepts low/high/no_think; Hy4 family high/no_think.
  if(provider==='hunyuan'){
   const body={thinking:{type:enabled?'enabled':'disabled'}};
   if(capability.efforts.length)body.reasoning_effort=enabled?effort:'no_think';
