@@ -13,13 +13,21 @@ ROOT = Path(__file__).resolve().parents[2]
 DB_PATH = '/dictionary/hanja_dict.db'
 _engine = None
 _stats_cache = {}
+_progress_callback = None
+
+def _report_progress(detail):
+    """Post only confirmed interpreter milestones to the worker host."""
+    if _progress_callback is None:return
+    try:_progress_callback(json.dumps(detail,ensure_ascii=False))
+    except Exception:pass  # UI telemetry must never change lexical analysis.
 
 async def _to_thread(func, /, *args, **kwargs):
     return func(*args, **kwargs)
 
-def configure(tokenizer, project_root=None, database=DB_PATH):
+def configure(tokenizer, project_root=None, database=DB_PATH, progress_callback=None):
     """Install a synchronous JSON-producing Kiwi WASM callback in this worker."""
-    global _engine, ROOT, DB_PATH
+    global _engine, ROOT, DB_PATH, _progress_callback
+    _progress_callback = progress_callback
     if project_root is not None: ROOT = Path(project_root)
     DB_PATH = database
     if str(ROOT) not in sys.path: sys.path.insert(0, str(ROOT))
@@ -46,9 +54,9 @@ async def _get_engine(db_path=None):
     await _engine.initialize()
     return _engine
 
-async def analyze(text, modes, db_path=None):
+async def analyze(text, modes, db_path=None, progress=None):
     if isinstance(modes, str): modes = json.loads(modes)
-    return await (await _get_engine(db_path)).analyze(text, modes)
+    return await (await _get_engine(db_path)).analyze(text, modes, progress=progress)
 
 async def status(db_path=None):
     # Database state does not require a tokenizer or model initialization.
@@ -132,6 +140,14 @@ def import_dictionary(zip_path, db_path=None):
         if old_environment is None: os.environ.pop('HANJA_DB_PATH',None)
         else: os.environ['HANJA_DB_PATH'] = old_environment
 
+def compact_analysis_wire(result):
+    """Remove repeated full-paragraph context only from the browser JSON wire."""
+    if not isinstance(result,dict) or not isinstance(result.get('targets'),list):
+        return result
+    return {**result,'targets':[
+        {key:value for key,value in target.items() if key!='context'}
+        for target in result['targets']]}
+
 async def analyze_json(text, modes, db_path=None): return json.dumps(await analyze(text,modes,db_path),ensure_ascii=False)
 async def status_json(db_path=None): return json.dumps(await status(db_path),ensure_ascii=False)
 def import_dictionary_json(zip_path, db_path=None): return json.dumps(import_dictionary(zip_path,db_path),ensure_ascii=False)
@@ -151,7 +167,44 @@ async def request(raw):
         await _get_engine(database)
         result = {'ready':True,'preloaded':True}
     elif action == 'analyze':
-        result = await analyze(message['text'],message.get('modes',{}),database)
+        text=message['text']
+        _report_progress({'stage':'analysis-paragraph','event':'start','batchIndex':1,'batchTotal':1,
+                          'sentenceCharacters':len(text)})
+        result = compact_analysis_wire(await analyze(
+            text,message.get('modes',{}),database,
+            progress=lambda detail:_report_progress({'batchIndex':1,'batchTotal':1,**detail})))
+        _report_progress({'stage':'analysis-paragraph','event':'done','batchIndex':1,'batchTotal':1,
+                          'sentenceCharacters':len(text)})
+    elif action == 'analyze-batch':
+        texts=message.get('texts')
+        if (not isinstance(texts,list) or not 1<=len(texts)<=12 or
+                any(not isinstance(text,str) or len(text)>20000 for text in texts) or
+                sum(len(text) for text in texts)>48000):
+            raise ValueError('Invalid bounded local paragraph batch')
+        engine=await _get_engine(database)
+        # Only one analysis request runs at a time in the browser worker.
+        # One SQLite connection across this batch avoids opening it on
+        # every definition, proper-name and candidate query.
+        async def run_batch():
+            results=[]
+            for index,text in enumerate(texts,1):
+                _report_progress({'stage':'analysis-paragraph','event':'start',
+                                  'batchIndex':index,'batchTotal':len(texts),
+                                  'sentenceCharacters':len(text)})
+                detail=lambda event,idx=index:_report_progress(
+                    {'batchIndex':idx,'batchTotal':len(texts),**event})
+                analyzed=await engine.analyze(text,message.get('modes',{}),progress=detail)
+                results.append(compact_analysis_wire(analyzed))
+                _report_progress({'stage':'analysis-paragraph','event':'done',
+                                  'batchIndex':index,'batchTotal':len(texts),
+                                  'sentenceCharacters':len(text),
+                                  'batchDoneUnique':index})
+            return results
+        if engine.dictionary is not None:
+            async with engine.dictionary.reuse_read_connection():
+                result=await run_batch()
+        else:
+            result=await run_batch()
     elif action == 'import-db':
         result = await import_database(message['path'],database)
     elif action == 'import':

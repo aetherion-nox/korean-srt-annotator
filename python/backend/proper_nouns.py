@@ -37,11 +37,18 @@ async def surname_name_evidence(text,tokens,lookup):
         if parts[0].tag.split('-')[0]=='NR' and any(r.get('unit_usage') is True for t in parts[1:] for r in entries.get(t.form,[])):continue
         split_hint=len(parts)>1 and parts[0].tag.split('-')[0]=='NNP' and len(parts[0].form)<=2
         surname=any(r.get('surname_usage') is True for prefix in (word[:1],word[:2]) if len(prefix)<len(word) for r in entries.get(prefix,[]))
-        if split_hint or surname:
+        # A common compound beginning with a surname syllable is not itself
+        # a split personal name. The first morphological part must be the
+        # complete dictionary surname (e.g. a separately segmented family
+        # name), not merely begin with one. Preserve explicit NNP evidence.
+        split_surname=any(parts[0].form==prefix and
+                          any(r.get('surname_usage') is True for r in entries.get(prefix,[]))
+                          for prefix in (word[:1],word[:2]) if len(prefix)<len(word))
+        if split_hint or (surname and (split_surname or parts[0].tag.split('-')[0]=='NNP')):
             full_entries=entries.get(word,[])
             if full_entries:
                 # One surname syllable in a normal whole-word token cannot trigger review.
-                confirmed_structure=(split_hint or (surname and len(parts)>1) or
+                confirmed_structure=(split_hint or (split_surname and len(parts)>1) or
                     (surname and parts[0].tag.split('-')[0]=='NNP'))
                 if confirmed_structure and any(is_dictionary_ordinary(r) for r in full_entries):
                     ambiguous.append((start,end,word,full_entries))
@@ -99,15 +106,22 @@ def _complete_lexical_span(text,tokens,start,end):
         return part.tag=='MM' and part.form=='이' and (i+1==len(tokens) or tokens[i+1].start>q)
     return False
 
-async def dictionary_name_evidence(text,tokens,lookup,*,include_person_hanja=False):
+async def dictionary_name_evidence(text,tokens,lookup,*,include_person_hanja=False,spans=None):
     from backend.mixed_origins import candidate_spans
-    spans=candidate_spans(text,tokens)
+    if spans is None:spans=candidate_spans(text,tokens)
     entries=await lookup(list(dict.fromkeys(word for _,_,word in spans))) if spans else {}
     names=[];conflicts=[];verified_person_hanja={}
     for a,b,word in spans:
         records=entries.get(word,[])
         people=[r for r in records if is_dictionary_person(r)]
         if not people:continue
+        # A dictionary can contain an unrelated historical person with the
+        # same reading as an ordinary noun/determiner. Without a proper-noun
+        # token, that homograph is NOT evidence that this occurrence is a name.
+        ordinary=any(is_dictionary_ordinary(r) for r in records)
+        tokens_here=[t for t in tokens if a<=t.start and t.start+t.length<=b and t.length>0]
+        has_proper_token=any(t.tag.split('-')[0]=='NNP' for t in tokens_here)
+        if ordinary and not has_proper_token:continue
         names.append((a,b))
         # A dictionary name flag by itself does NOT authorize generated Hanja.
         # Require the same exact source word AND a pure, aligned Hanja origin
