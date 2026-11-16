@@ -1,4 +1,4 @@
-import {browserEngineStatus,browserAnalyze} from './browser-engine.js';
+import {browserEngineStatus,browserAnalyze,browserAnalyzeBatch} from './browser-engine.js';
 import {normalizeBatchContextTier,normalizeOutputTokenLimit} from './batch-budget.js';
 const CJK=/[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\u{20000}-\u{323af}]/u;
 export function projectAnnotation(text,annotation){
@@ -65,7 +65,7 @@ export function validateAnalysis(text,data){
  for(const t of data.targets){
   if(t.proper_noun!==undefined&&typeof t.proper_noun!=='boolean')throw Error('Invalid proper-noun hint');
   if(t.suspected_person_name!==undefined&&typeof t.suspected_person_name!=='boolean')throw Error('Invalid suspected-name hint');
-  if(typeof t.target_id!=='string'||ids.has(t.target_id)||!Number.isInteger(t.start)||!Number.isInteger(t.end)||t.start<0||t.end<=t.start||text.slice(t.start,t.end)!==t.surface||t.context!==text||!Array.isArray(t.options))throw Error('Invalid engine target');
+  if(typeof t.target_id!=='string'||ids.has(t.target_id)||!Number.isInteger(t.start)||!Number.isInteger(t.end)||t.start<0||t.end<=t.start||text.slice(t.start,t.end)!==t.surface||(t.context!==undefined&&t.context!==text)||!Array.isArray(t.options))throw Error('Invalid engine target');
   ids.add(t.target_id);const choices=new Set(),validOptions=[];
   for(const o of t.options){
    if(Object.keys(o).some(k=>!['choice_id','type','replacement','entry_id','definitions','segments','written_form','part_of_speech','subject_category','semantic_category'].includes(k)))throw Error('Invalid engine option fields');
@@ -91,14 +91,18 @@ export function validateAnalysis(text,data){
    // Dictionary-free inputs have KEEP only; the model can propose allowed
    // Hanja/Latin origins which are independently validated before application.
    if(!convertible&&!nameOnlyReview&&!dictionaryFree&&t.experimental_loanword_audit!==true){rejectedTargets++;continue;}
-  targets.push({...t,options:validOptions});ranges.push([t.start,t.end]);
+  // Browser engine transmits the source text once per analyzed paragraph.
+  // Restore the original Target.context contract for all existing model,
+  // manual, and experimental checks, while preserving strict text agreement.
+  targets.push({...t,context:text,options:validOptions});ranges.push([t.start,t.end]);
  }
  ranges.sort((a,b)=>a[0]-b[0]);if(ranges.some((r,i)=>i&&r[0]<ranges[i-1][1]))throw Error('Overlapping engine spans');
  return {...data,annotations,targets,diagnostics,stats:{...data.stats,local_determined:Math.max(0,Number(data.stats.local_determined||0)-rejectedAnnotations),pending:Math.max(0,Number(data.stats.pending||0)-rejectedTargets),structural_rejections:Number(data.stats.structural_rejections||0)+rejectedAnnotations+rejectedTargets,rejected_options:Number(data.stats.rejected_options||0)+rejectedOptions}};
 }
 export async function engineConfig(){
- const {enableModelReview=false,reviewAllCandidates=false,manualModelReview=false,experimentalHanja=false,experimentalLoanword=false,hanjaReadingCheck=true,smartSegmentation=false,reviewLocalConversions=true,batchContextTier,manualOutputTokenLimit,apiOutputTokenLimit,nameProtection=true,filterDictionaryPeople=true,reviewPosFilter=true}=await chrome.storage.local.get(['enableModelReview','reviewAllCandidates','manualModelReview','experimentalHanja','experimentalLoanword','hanjaReadingCheck','smartSegmentation','reviewLocalConversions','batchContextTier','manualOutputTokenLimit','apiOutputTokenLimit','nameProtection','filterDictionaryPeople','reviewPosFilter']);
- return {reviewPosFilter:reviewPosFilter!==false,nameProtection:nameProtection!==false,filterDictionaryPeople:filterDictionaryPeople!==false,enableModelReview:enableModelReview===true||reviewAllCandidates===true||manualModelReview===true||experimentalHanja===true||experimentalLoanword===true||smartSegmentation===true,reviewAllCandidates:reviewAllCandidates===true,manualModelReview:manualModelReview===true,experimentalHanja:experimentalHanja===true,experimentalLoanword:experimentalLoanword===true,hanjaReadingCheck:hanjaReadingCheck!==false,smartSegmentation:smartSegmentation===true,reviewLocalConversions:reviewLocalConversions!==false,batchContextTier:normalizeBatchContextTier(batchContextTier),manualOutputTokenLimit:normalizeOutputTokenLimit(manualOutputTokenLimit,true),apiOutputTokenLimit:normalizeOutputTokenLimit(apiOutputTokenLimit,false)};
+ const {enableModelReview=false,reviewAllCandidates=false,manualModelReview=false,experimentalHanja=false,experimentalLoanword=false,hanjaReadingCheck=true,smartSegmentation=false,reviewLocalConversions=true,batchContextTier,manualOutputTokenLimit,apiOutputTokenLimit,matchManualOutputBudget=true,nameProtection=true,filterDictionaryPeople=true,reviewPosFilter=true}=await chrome.storage.local.get(['enableModelReview','reviewAllCandidates','manualModelReview','experimentalHanja','experimentalLoanword','hanjaReadingCheck','smartSegmentation','reviewLocalConversions','batchContextTier','manualOutputTokenLimit','apiOutputTokenLimit','matchManualOutputBudget','nameProtection','filterDictionaryPeople','reviewPosFilter']);
+ return {reviewPosFilter:reviewPosFilter!==false,nameProtection:nameProtection!==false,filterDictionaryPeople:filterDictionaryPeople!==false,enableModelReview:enableModelReview===true||reviewAllCandidates===true||manualModelReview===true||experimentalHanja===true||experimentalLoanword===true||smartSegmentation===true,reviewAllCandidates:reviewAllCandidates===true,manualModelReview:manualModelReview===true,experimentalHanja:experimentalHanja===true,experimentalLoanword:experimentalLoanword===true,hanjaReadingCheck:hanjaReadingCheck!==false,smartSegmentation:smartSegmentation===true,reviewLocalConversions:reviewLocalConversions!==false,batchContextTier:normalizeBatchContextTier(batchContextTier),manualOutputTokenLimit:normalizeOutputTokenLimit(manualOutputTokenLimit,true),apiOutputTokenLimit:normalizeOutputTokenLimit(apiOutputTokenLimit,false),matchManualOutputBudget:matchManualOutputBudget!==false};
 }
 export const engineStatus=browserEngineStatus;
 export const analyzeLocal=browserAnalyze;
+export const analyzeLocalBatch=browserAnalyzeBatch;

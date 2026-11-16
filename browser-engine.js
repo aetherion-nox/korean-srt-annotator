@@ -14,6 +14,8 @@ async function call(request,signal,onProgress){
 export function warmBrowserEngine(signal,onProgress){return call({action:'warmup'},signal,onProgress);}
 export function browserEngineStatus(signal,onProgress,options={}){return call({action:'status',allowNoDictionary:options.allowNoDictionary===true},signal,onProgress);}
 export function browserAnalyze(text,modes,signal,onProgress){return call({action:'analyze',text,modes},signal,onProgress);}
+// Multiple independent paragraphs share one worker/Pyodide round-trip.
+export function browserAnalyzeBatch(texts,modes,signal,onProgress){return call({action:'analyze-batch',texts,modes},signal,onProgress);}
 export async function importBrowserDictionary(file){
  if(!file)throw Error('请选择官方 JSON ZIP 或预处理词典数据库');
  const kind=/\.(db|sqlite|sqlite3)$/i.test(file.name)?'db':'zip';
