@@ -28,9 +28,24 @@
    model('qwen3.7-max-preview','required',[],qwenDocs),
    model('qwen-max','none',[],'https://help.aliyun.com/zh/model-studio/qwen-api-via-openai-chat-completions')
   ]},
+  {id:'gemini',label:'Google Gemini',endpoint:'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions',models:[
+   ...['gemini-3.8-flash','gemini-3.5-flash','gemini-3.1-pro-preview'].map(id=>model(id,'required',['low','medium','high'],'https://ai.google.dev/gemini-api/docs/openai')),
+   model('gemini-2.5-flash','toggle',['low','medium','high'],'https://ai.google.dev/gemini-api/docs/models/gemini-2.5-flash'),
+   model('gemini-2.5-pro','required',['low','medium','high'],'https://ai.google.dev/gemini-api/docs/models/gemini-2.5-pro')
+  ]},
+  {id:'muse',label:'Meta Muse (Model API)',endpoint:'https://api.meta.ai/v1/chat/completions',models:[
+   model('muse-spark-1.3','required',['minimal','low','medium','high','xhigh','max'],'https://dev.meta.ai/docs/muse-spark'),
+   model('muse-wonder-1.0','required',['minimal','low','medium','high','xhigh','max'],'https://dev.meta.ai/docs/overview'),
+   model('muse-ember-1.0','required',['minimal','low','medium','high','xhigh','max'],'https://dev.meta.ai/docs/overview')
+  ]},
+  {id:'hunyuan',label:'腾讯混元 (TokenHub)',endpoint:'https://tokenhub.tencentmaas.com/v1/chat/completions',models:[
+   model('hy4','toggle',['high'],'https://cloud.tencent.com/document/product/1823/132252'),
+   model('hy4-flash','toggle',[],'https://cloud.tencent.com/document/product/1823/130051'),
+   model('hy3','toggle',['low','high'],'https://cloud.tencent.com/document/product/1823/131208')
+  ]},
   {id:'custom',label:'自定义 / Custom',endpoint:'',models:[]}
  ];
- function inferProvider(endpoint){try{const host=new URL(endpoint).hostname;if(['dashscope.aliyuncs.com','dashscope-intl.aliyuncs.com','dashscope-us.aliyuncs.com'].includes(host)||/^[a-z0-9-]+\.[a-z0-9-]+\.maas\.aliyuncs\.com$/.test(host))return 'qwen';return providers.find(p=>p.endpoint&&new URL(p.endpoint).hostname===host)?.id||'custom';}catch{return 'custom';}}
+ function inferProvider(endpoint){try{const host=new URL(endpoint).hostname;if(/^(tokenhub|tokenhub-intl)\.tencentmaas\.(com|cn)$/.test(host))return 'hunyuan';if(['dashscope.aliyuncs.com','dashscope-intl.aliyuncs.com','dashscope-us.aliyuncs.com'].includes(host)||/^[a-z0-9-]+\.[a-z0-9-]+\.maas\.aliyuncs\.com$/.test(host))return 'qwen';return providers.find(p=>p.endpoint&&new URL(p.endpoint).hostname===host)?.id||'custom';}catch{return 'custom';}}
  function resolve(config){const id=config.provider||inferProvider(config.endpoint);return providers.find(p=>p.id===id)?.models.find(m=>m.id===config.model)||null;}
- globalThis.KRA_MODEL_CATALOG={providers,inferProvider,resolve,verifiedAt:'2026-10-12',qwenVerifiedAt:'2026-10-27'};
+ globalThis.KRA_MODEL_CATALOG={providers,inferProvider,resolve,verifiedAt:'2026-10-12',qwenVerifiedAt:'2026-10-27',newProvidersVerifiedAt:'2026-11-16'};
 })();

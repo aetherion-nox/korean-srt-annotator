@@ -98,6 +98,19 @@ export function thinkingSettings(config){
   if(enabled&&capability.efforts.length)body.reasoning_effort=effort;
   return {body,label:enabled?`Qwen 思考开启${capability.efforts.length?'（'+effort+'）':''}`:'Qwen 思考关闭'};
  }
+ // Gemini and Meta Muse use OpenAI-style reasoning_effort rather than
+ // Xiaomi/GLM's vendor-specific "thinking" object. Muse cannot disable reasoning.
+ if(provider==='gemini'||provider==='muse'){
+  const level=enabled?effort:'none';
+  return {body:{reasoning_effort:level},label:enabled?`思考强度：${level}`:'关闭思考'};
+ }
+ // TokenHub officially supports thinking.type enabled/disabled. For Hy4/Hy3
+ // the optional reasoning_effort is high/low or no_think (never OpenAI "none").
+ if(provider==='hunyuan'){
+  const body={thinking:{type:enabled?'enabled':'disabled'}};
+  if(capability.efforts.length)body.reasoning_effort=enabled?effort:'no_think';
+  return {body,label:enabled?(effort?`混元思考强度：${effort}`:'混元思考开启'):'混元关闭思考'};
+ }
  if(provider==='openai')return {body:{reasoning_effort:enabled?effort:'none'},label:enabled?`思考强度：${effort}`:'关闭思考'};
  if(provider==='anthropic')return {body:{thinking:{type:enabled?'adaptive':capability.offType||'disabled'},output_config:{effort:enabled?effort:'low'}},label:enabled?`自适应思考（${effort}）`:capability.offType==='between_tools'?'关闭前置思考':'关闭思考'};
  const body={thinking:{type:enabled?'enabled':'disabled'}};
@@ -228,7 +241,7 @@ async function requestChoices(config,targets,signal){
  const responses=provider==='openai'&&/\/responses\/?$/.test(new URL(config.endpoint).pathname);
  const requestedCap=config.apiOutputTokenLimit??config.batchBudget?.outputLimit;
  const requestBudget=describeBatchBudget(config.context||'',targets,{
-  tier:config.batchContextTier||'32k',wireIds:true,manual:false,
+  tier:config.batchContextTier||'1m',wireIds:true,manual:false,
   reviewPosFilter:config.reviewPosFilter,experimentalHanja:config.experimentalHanja,
   experimentalLoanword:config.experimentalLoanword,dictionaryFree:config.dictionaryFree,
   smartSegmentation:config.smartSegmentation,manualOutputTokenLimit:config.manualOutputTokenLimit,
@@ -245,7 +258,7 @@ async function requestChoices(config,targets,signal){
   const {messages,thinking,output_config}=body;
   body={model:config.model,system:messages[0].content,messages:messages.slice(1),
    max_tokens:outputTokenLimit,...(thinking?{thinking,output_config}:{})};
- }else if(provider==='openai'){
+ }else if(provider==='openai'||provider==='muse'){
   body.max_completion_tokens=outputTokenLimit;
  }else{
   body.max_tokens=outputTokenLimit;
