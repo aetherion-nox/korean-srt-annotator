@@ -3,7 +3,7 @@ import {runSentencePipeline} from '../annotation-pipeline.js';
 const root=new URL('../',import.meta.url);
 async function page(saved=true){
  let listener;const calls=[],events=[];const identity={ready:true,engine_version:'engine',dictionary_fingerprint:'dict'};
- class Worker{postMessage(data){calls.push(data.request);queueMicrotask(()=>this.onmessage({data:{id:data.id,progress:{stage:'tokenizer'}}}));queueMicrotask(()=>this.onmessage({data:{id:data.id,ok:true,result:{...identity}}}));}terminate(){}}
+ class Worker{postMessage(data){calls.push(data.request);queueMicrotask(()=>this.onmessage({data:{id:data.id,progress:{stage:'tokenizer'}}}));queueMicrotask(()=>this.onmessage({data:{id:data.id,ok:true,result:{...identity,...(data.request.action==='import-db'?{database:new ArrayBuffer(4)}:{})}}}));}terminate(){}}
  let src=await fs.readFile(new URL('engine-page.js',root),'utf8');src=src.replace(/^import .*;\n/gm,'').replaceAll('import.meta.url',JSON.stringify(root.href));
  const context={Worker,URL,Map,Promise,Error,Boolean,String,storage:async(action,key)=>action==='get'?(key==='dictionary'?(saved?new ArrayBuffer(4):null):{kind:'db',name:'replacement.db',bytes:new ArrayBuffer(4)}):undefined,copyPlainText(){},createKiwiManager:()=>({status:async()=>({identity:'built-in'}),tokenize:async()=>null}),chrome:{runtime:{id:'test',onMessage:{addListener:f=>listener=f},sendMessage:async e=>{events.push(e);}}}};
  vm.runInNewContext(src,context);
@@ -16,7 +16,9 @@ test('cold status hydrates and reports progress without repeating status or sett
 test('pipeline reports real loading and current paragraph before its result, including cache reuse',async()=>{
  const identity={engine_version:'engine',dictionary_fingerprint:'dict'},events=[],cache=new Map();let analyses=0;
  const run=()=>runSentencePipeline({operationId:'op',sentences:[{id:'s0',text:'학교'},{id:'s1',text:'학교'}],modes:{hanja:true}},e=>events.push(e),{cache,status:async(signal,progress)=>{progress?.({stage:'dictionary'});return identity;},analyze:async(text,modes,signal,progress)=>{analyses++;progress?.({stage:'tokenizer'});progress?.({stage:'analysis'});return {...identity,annotations:[],targets:[],stats:{}};}});
- await run();assert.equal(analyses,1);const progress=events.filter(e=>e.type==='LOCAL_PROGRESS');assert.ok(progress.some(e=>e.stage==='dictionary'));assert.ok(progress.some(e=>e.stage==='tokenizer'));assert.ok(progress.some(e=>e.stage==='analysis'&&e.currentSentence===2&&e.totalSentences===2));assert.equal(progress.find(e=>e.currentSentence===1).completedSentences,0);assert.ok(events.findIndex(e=>e.type==='LOCAL_PROGRESS')<events.findIndex(e=>e.type==='RESULTS'));
+ await run();assert.equal(analyses,1);const progress=events.filter(e=>e.type==='LOCAL_PROGRESS');assert.ok(progress.some(e=>e.stage==='dictionary'));assert.ok(progress.some(e=>e.stage==='tokenizer'));assert.ok(progress.some(e=>e.stage==='analysis'&&e.currentSentence===1&&e.totalSentences===2));
+ const cachedResult=events.filter(e=>e.type==='RESULTS').find(e=>e.currentSentence===2);
+ assert.equal(cachedResult?.sentenceCharacters,2,'cache-hit paragraph reports its own source length');assert.equal(progress.find(e=>e.currentSentence===1).completedSentences,0);assert.ok(events.findIndex(e=>e.type==='LOCAL_PROGRESS')<events.findIndex(e=>e.type==='RESULTS'));
 });
 test('worker attaches dictionary once, initializes tokenizer lazily and emits real phases',async()=>{
  let message;const events=[],pythonCalls=[];let exists=false;

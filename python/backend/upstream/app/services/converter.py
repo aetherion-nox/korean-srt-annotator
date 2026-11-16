@@ -9,7 +9,7 @@ Core principles:
 5. Never do global syllable-by-syllable replacement
 """
 
-from app.services.quantity import has_quantity_before
+from app.services.quantity import has_quantity_before, indexed_quantity_before
 import time
 import re
 from bisect import bisect_right
@@ -54,6 +54,7 @@ class ConverterService:
         lookup_fn,  # async callable: (List[str]) -> Dict[str, List[dict]]
         *,
         tokens: Optional[List[MorphToken]] = None,
+        progress=None,
     ) -> Tuple[List[ConversionSegment], float]:
         start_time = time.perf_counter()
 
@@ -79,6 +80,9 @@ class ConverterService:
 
         # Step 2: Build word groups (whitespace-delimited units)
         groups = self.tokenizer.build_word_groups(text, tokens)
+        # Shared source-ordered predecessor evidence, built once for the
+        # entire paragraph rather than scanning all Kiwi tokens per word.
+        quantity_by_start=indexed_quantity_before(text,tokens)
 
         # Step 3: Collect forms to look up
         forms_to_lookup = set()
@@ -100,7 +104,12 @@ class ConverterService:
             index=next((i for i,t in enumerate(neighbors) if t.start>token.start),len(neighbors))
             context_by_start[token.start]=list(dict.fromkeys(t.form for t in neighbors[max(0,index-CONTEXT_RADIUS):index+CONTEXT_RADIUS]))
 
-        for group in groups:
+        if progress is not None:progress('forms',0,len(groups))
+        for group_idx,group in enumerate(groups):
+            # Count only groups already processed. The callback is a no-op on
+            # fast batches and emits no more than one update per 128 groups.
+            if progress is not None and group_idx and not (group_idx & 127):
+                progress('forms',group_idx,len(groups))
             if not group.has_content:
                 continue
             for token in group.tokens:
@@ -131,6 +140,9 @@ class ConverterService:
                         span_form = "".join(t.form for t in sub)
                         forms_to_lookup.add(span_form)
 
+        # SQLite lookup is a single blocking batch; announce its real start
+        # rather than claiming completion while it is in progress.
+        if progress is not None:progress('lookup',0,len(forms_to_lookup))
         # Step 4: Batch lookup candidates from dictionary
         if forms_to_lookup:
             candidates_map = await lookup_fn(list(forms_to_lookup))
@@ -138,10 +150,13 @@ class ConverterService:
             candidates_map = {}
 
         # Step 5: Process segments
+        if progress is not None:progress('scoring',0,len(groups))
         segments = []
         segment_id = 0
 
         for group_idx, group in enumerate(groups):
+            if progress is not None and group_idx and not (group_idx & 127):
+                progress('scoring',group_idx,len(groups))
             if not group.has_content:
                 seg = ConversionSegment(
                     segment_id=segment_id,
@@ -157,7 +172,8 @@ class ConverterService:
                 continue
 
             group_segments = self._process_word_group(
-                text, group, candidates_map, segment_id, context_by_start, tokens
+                text, group, candidates_map, segment_id, context_by_start, tokens, quantity_by_start,
+                progress=progress if progress is not None and len(group.tokens)>=128 else None
             )
             segments.extend(group_segments)
             segment_id += len(group_segments)
@@ -176,6 +192,8 @@ class ConverterService:
         start_id: int,
         context_by_start: Dict[int, List[str]],
         all_tokens=None,
+        quantity_by_start=None,
+        progress=None,
     ) -> List[ConversionSegment]:
         segments = []
         seg_id = start_id
@@ -185,6 +203,10 @@ class ConverterService:
         i = 0
 
         while i < num_tokens:
+            # An unusually long unspaced word group cannot rely on
+            # group-level checkpoints. Keep this callback off short groups.
+            if progress is not None and i and not (i & 127):
+                progress('word_tokens',i,num_tokens)
             token = group.tokens[i]
             sentence_context = context_by_start.get(token.start, [])
 
@@ -340,7 +362,8 @@ class ConverterService:
                         token_tag=candidate_tag,
                         context_forms=context_forms,
                         is_verbal_context=is_verbal_context,
-                        quantity=has_quantity_before(text, all_tokens or group.tokens, token.start),
+                        quantity=(quantity_by_start.get(token.start,False) if quantity_by_start is not None
+                              else has_quantity_before(text, all_tokens or group.tokens, token.start)),
                     )
                     selected, status = self.disambiguation.select_best(scored)
 

@@ -67,6 +67,9 @@ export function alignedHanjaStemSuffix(target,origin){
 // Return null instead of silently changing / accepting an unknown choice.
 // A raw model origin is *not* a dictionary-backed etymology.
 export function literalOriginOption(target,choiceId,config={}){
+ // Models occasionally quote the JSON null sentinel. Do not turn that
+ // mistake into a Latin-script annotation (especially in manual recovery).
+ if(typeof choiceId==='string'&&choiceId.toLowerCase()==='null')return null;
  if(typeof choiceId!=='string'||!choiceId||choiceId.length>160||choiceId!==choiceId.trim()||
     /[<>\x00-\x1f\x7f]/u.test(choiceId)||RESERVED.test(choiceId))return null;
  // Internal nonconversion/keep options are not model-visible sentinels.
@@ -98,6 +101,7 @@ export function literalOriginOption(target,choiceId,config={}){
 export function explainLiteralOriginRejection(target,choiceId,config={}){
  if(typeof choiceId!=='string'||!choiceId||choiceId.length>160||choiceId!==choiceId.trim()||RESERVED.test(choiceId))
   return 'invalid_choice_id';
+ if(choiceId.toLowerCase()==='null')return 'quoted_json_null';
  if(target.options?.some(o=>o.type!=='keep'&&o.choice_id===choiceId))return 'known_choice_key';
  if(/\p{Script=Han}/u.test(choiceId)&&/\p{Script=Latin}/u.test(choiceId))
   return 'mixed_script_requires_segments';

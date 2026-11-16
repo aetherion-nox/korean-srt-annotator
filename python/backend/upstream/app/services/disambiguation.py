@@ -34,6 +34,27 @@ MIN_AUTO_SELECT_SCORE = 0.5
 MIN_SCORE_GAP = 0.15
 
 
+# Shared POS lookup table: allocating this mapping per candidate dominated
+# some large-page Converter scoring hot loops. Values and matching rules stay unchanged.
+_POS_MAP = {
+    '명사': ['NNG', 'NNP', 'NNB', 'NR', 'NP'],
+    '동사': ['VV', 'VX', 'XSV'],
+    '형용사': ['VA', 'VCP', 'VCN', 'XSA'],
+    '부사': ['MAG', 'MAJ'],
+    '관형사': ['MM'],
+    '감탄사': ['IC'],
+    '대명사': ['NP'],
+    '수사': ['NR'],
+    '접사': ['XPN', 'XSN', 'XSV', 'XSA'],
+    '의존 명사': ['NNB'],
+    '보조 동사': ['VX'],
+    '보조 형용사': ['VX'],
+    '고유 명사': ['NNP'],
+    '조사': ['J'],
+    '어미': ['E'],
+    '어근': ['XR', 'NNG'],
+}
+
 class DisambiguationService:
     """Select the best Hanja conversion candidate using local heuristics."""
 
@@ -220,24 +241,6 @@ class DisambiguationService:
     def _pos_matches(self, kiwi_tag: str, dict_pos: str) -> Optional[bool]:
         if is_dependent_noun(dict_pos):
             dict_pos = '의존 명사'
-        pos_map = {
-            '명사': ['NNG', 'NNP', 'NNB', 'NR', 'NP'],
-            '동사': ['VV', 'VX', 'XSV'],
-            '형용사': ['VA', 'VCP', 'VCN', 'XSA'],
-            '부사': ['MAG', 'MAJ'],
-            '관형사': ['MM'],
-            '감탄사': ['IC'],
-            '대명사': ['NP'],
-            '수사': ['NR'],
-            '접사': ['XPN', 'XSN', 'XSV', 'XSA'],
-            '의존 명사': ['NNB'],
-            '보조 동사': ['VX'],
-            '보조 형용사': ['VX'],
-            '고유 명사': ['NNP'],
-            '조사': ['J'],
-            '어미': ['E'],
-            '어근': ['XR', 'NNG'],
-        }
-        if dict_pos not in pos_map:return None
-        expected_tags = pos_map[dict_pos]
+        if dict_pos not in _POS_MAP:return None
+        expected_tags = _POS_MAP[dict_pos]
         return kiwi_tag in expected_tags or any(kiwi_tag.startswith(t) for t in expected_tags)

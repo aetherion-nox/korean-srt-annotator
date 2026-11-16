@@ -51,7 +51,7 @@ export function prepareManualRequest(config,targets){
    dictionary_person_name:t.dictionary_person_name===true,dictionary_name_homograph:t.dictionary_name_homograph===true
   })),scopes:[...scopes]};
  })():undefined;
- return {requestId,bindings,repairValidation,smartSegmentation:config.smartSegmentation===true,hanjaReadingCheck:config.hanjaReadingCheck!==false,batchNumber:config.batchNumber,batchTotal:config.batchTotal,targetCount:wireTargets.filter(t=>!(config.smartSegmentation===true&&t.scan_only===true)).length,text:buildManualPrompt(config.context,wireTargets,requestId,config),budget:{...describeBatchBudget(config.context,wireTargets,{tier:config.batchContextTier,manual:true,wireIds:true,batchId:requestId,reviewPosFilter:config.reviewPosFilter,experimentalHanja:config.experimentalHanja,experimentalLoanword:config.experimentalLoanword,dictionaryFree:config.dictionaryFree,smartSegmentation:config.smartSegmentation,manualOutputTokenLimit:config.manualOutputTokenLimit,apiOutputTokenLimit:config.apiOutputTokenLimit}),limitReason:config.batchBudget?.limitReason}};
+ return {requestId,bindings,repairValidation,smartSegmentation:config.smartSegmentation===true,hanjaReadingCheck:config.hanjaReadingCheck===true,batchNumber:config.batchNumber,batchTotal:config.batchTotal,targetCount:wireTargets.filter(t=>!(config.smartSegmentation===true&&t.scan_only===true)).length,text:buildManualPrompt(config.context,wireTargets,requestId,config),budget:{...describeBatchBudget(config.context,wireTargets,{tier:config.batchContextTier,manual:true,wireIds:true,batchId:requestId,reviewPosFilter:config.reviewPosFilter,experimentalHanja:config.experimentalHanja,experimentalLoanword:config.experimentalLoanword,dictionaryFree:config.dictionaryFree,smartSegmentation:config.smartSegmentation,manualOutputTokenLimit:config.manualOutputTokenLimit,apiOutputTokenLimit:config.apiOutputTokenLimit}),limitReason:config.batchBudget?.limitReason}};
 }
 
 // Preserve the original shared pools and restrict retry work to unsolved IDs.
@@ -91,7 +91,7 @@ export function createManualReviewSession({operationId,post,signal}={}){
     const clear=()=>{activeSignal?.removeEventListener('abort',abort);if(pending?.requestId===requestId)pending=null;};
     const abort=()=>{clear();reject(activeSignal.reason||new DOMException('Operation aborted','AbortError'));};
     pending={requestId,targets,wireTargets,originalPrompt:prepared.text,acceptedRows:new Map(),savedRepairs:[],
-      experimentalHanja:config.experimentalHanja===true,experimentalLoanword:config.experimentalLoanword===true,hanjaReadingCheck:config.hanjaReadingCheck!==false,
+      experimentalHanja:config.experimentalHanja===true,experimentalLoanword:config.experimentalLoanword===true,hanjaReadingCheck:config.hanjaReadingCheck===true,
       reviewPosFilter:config.reviewPosFilter,smartSegmentation:config.smartSegmentation===true,
       repairContext:config.context,repairModes:config.repairModes,
       repairScopes:new Map(targets.map((target,i)=>[wireTargets[i].target_id,config.repairScopes?.get(target.target_id)])),

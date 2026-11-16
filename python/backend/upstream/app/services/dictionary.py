@@ -7,12 +7,15 @@ import aiosqlite
 import json
 import re
 from collections import OrderedDict, defaultdict
+from contextlib import asynccontextmanager
 from typing import List, Optional, Dict, Tuple, Any
 
 
 class DictionaryService:
     def __init__(self, db_path: str):
         self.db_path = db_path
+        # Batch scope is entered only by the browser's serial worker queue.
+        self._batch_read_db = None
         self._candidate_cache = OrderedDict()
         self._max_cache = 20000
         self._stats = None
@@ -20,10 +23,30 @@ class DictionaryService:
         self._cjk_re = re.compile(r'[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]')
 
     async def get_connection(self) -> aiosqlite.Connection:
+        if self._batch_read_db is not None:
+            return self._batch_read_db
         db = await aiosqlite.connect(self.db_path)
         db.row_factory = aiosqlite.Row
         await db.execute('PRAGMA foreign_keys=ON')
         return db
+
+    async def release_connection(self, db):
+        if db is not self._batch_read_db:
+            await db.close()
+
+    @asynccontextmanager
+    async def reuse_read_connection(self):
+        """One SQLite connection for a serial browser batch; closed on failure."""
+        if self._batch_read_db is not None:
+            yield
+            return
+        db = await self.get_connection()
+        self._batch_read_db = db
+        try:
+            yield
+        finally:
+            self._batch_read_db = None
+            await db.close()
 
     async def load_collocations(self, db: Optional[aiosqlite.Connection] = None) -> Dict[Tuple[str, str], str]:
         """Extract word-pair collocations from multi-word dictionary entries."""
@@ -67,7 +90,7 @@ class DictionaryService:
             return self._collocations
         finally:
             if close_db:
-                await db.close()
+                await self.release_connection(db)
 
     @staticmethod
     def _alias_sources(forms):
@@ -110,7 +133,7 @@ class DictionaryService:
                                 seen[form].add(row['id'])
             return result
         finally:
-            if close_db:await db.close()
+            if close_db:await self.release_connection(db)
 
     async def lookup_by_written_form(self, written_form: str, db=None):
         return (await self.batch_lookup_entries([written_form],db)).get(written_form,[])
@@ -189,7 +212,7 @@ class DictionaryService:
                 self._cache_candidates(form,result[form])
             return result
         finally:
-            if close_db:await db.close()
+            if close_db:await self.release_connection(db)
 
     async def get_metadata_for_entries(self, entry_ids):
         ids=list(dict.fromkeys(i for i in entry_ids if i is not None))
@@ -203,7 +226,7 @@ class DictionaryService:
                     for row in await cursor.fetchall():result[row['id']]={k:row[k] for k in ('written_form','part_of_speech','subject_category','semantic_category') if row[k] is not None}
             return result
         finally:
-            await db.close()
+            await self.release_connection(db)
 
     async def get_definitions_for_entries(self, entry_ids) -> Dict[int, List[str]]:
         """Fetch complete senses in batches without loading examples/metadata."""
@@ -220,7 +243,7 @@ class DictionaryService:
                         if row['definition']:result[row['entry_id']].append(row['definition'])
             return result
         finally:
-            await db.close()
+            await self.release_connection(db)
 
     async def get_entry_detail(
         self, entry_id: int, db: Optional[aiosqlite.Connection] = None, *, include_raw: bool = False
@@ -268,7 +291,7 @@ class DictionaryService:
             return entry
         finally:
             if close_db:
-                await db.close()
+                await self.release_connection(db)
 
     async def _get_senses(
         self, entry_id: int, db: aiosqlite.Connection
@@ -305,7 +328,7 @@ class DictionaryService:
                 row = await cursor.fetchone()
                 return json.loads(row[0]) if row else None
         finally:
-            await db.close()
+            await self.release_connection(db)
 
     async def search_entries(
         self, query: str, search_type: str = 'written_form',
@@ -385,7 +408,7 @@ class DictionaryService:
             return results, total
         finally:
             if close_db:
-                await db.close()
+                await self.release_connection(db)
 
     async def get_stats(
         self, db: Optional[aiosqlite.Connection] = None
@@ -434,7 +457,7 @@ class DictionaryService:
             return stats
         finally:
             if close_db:
-                await db.close()
+                await self.release_connection(db)
 
     def _cache_candidates(self, form, candidates):
         self._candidate_cache[form] = candidates
@@ -466,7 +489,7 @@ class DictionaryService:
                         result[item['written_form']].append(item)
             return result
         finally:
-            await db.close()
+            await self.release_connection(db)
 
     async def get_entry_candidate_info(self, entry_id: int) -> Optional[dict]:
         """Look up candidate details and origin info for candidate selection validation."""
@@ -490,7 +513,7 @@ class DictionaryService:
                 'candidate': candidate,
             }
         finally:
-            await db.close()
+            await self.release_connection(db)
 
     def build_origin_dict(self, entry: dict) -> Optional[dict]:
         """Build structured origin data from dictionary entry."""

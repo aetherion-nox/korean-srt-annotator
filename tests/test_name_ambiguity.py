@@ -5,11 +5,13 @@ class NameAmbiguity(unittest.IsolatedAsyncioTestCase):
  asyncSetUp=Tests.asyncSetUp
  asyncTearDown=Tests.asyncTearDown
  add=Tests.add
+ # A person/common-noun homograph needs independent proper-name token evidence.
+ # With only NNG the new 56.50 guard deliberately permits the ordinary sense.
  async def test_same_spelling_name_and_ordinary_requires_model_and_bypasses_local(self):
   ordinary=self.add('이상','理想','명사','바라는 상태.')
   person=self.add('이상','李箱','고유 명사','유명한 시인.')
   with sqlite3.connect(self.path) as db:db.execute("UPDATE entries SET subject_category='인명' WHERE id=?",(person,))
-  t=tokenizer();t._kiwi=types.SimpleNamespace(tokenize=lambda _:[types.SimpleNamespace(form='이상',tag='NNG',start=0,len=2),types.SimpleNamespace(form='은',tag='JX',start=2,len=1)])
+  t=tokenizer();t._kiwi=types.SimpleNamespace(tokenize=lambda _:[types.SimpleNamespace(form='이상',tag='NNP',start=0,len=2),types.SimpleNamespace(form='은',tag='JX',start=2,len=1)])
   r=await Engine(self.path,tokenizer=t).analyze('이상은',dict(hanja=True,loanword=True,nameProtection=True))
   self.assertEqual(r['annotations'],[])
   self.assertEqual(len(r['targets']),1)

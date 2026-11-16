@@ -1,6 +1,8 @@
 """Protocol adapter around Arrow36 conversion with native-reading safeguards."""
 import asyncio
 import re
+from time import perf_counter
+from bisect import bisect_left, bisect_right
 from pathlib import Path
 from backend.bootstrap import ensure_environment
 from backend.offsets import to_utf16
@@ -16,6 +18,57 @@ from app.database import validate_database
 
 ENGINE_VERSION = '34fd08a7d03706a21a2c2e1b00571f2d838cd508:kra-name-homograph-1.1.55'
 DEFAULT_DB = Path(__file__).resolve().parent / 'hanja_dict.db'
+
+class _SpanIndex:
+    """Static overlapping intervals: one O(n log n) build, O(log n) probes."""
+    def __init__(self,ranges):
+        ordered=sorted(ranges)
+        self.starts=[a for a,_ in ordered]
+        self.maximum_ends=[]
+        maximum=-1
+        for _,end in ordered:
+            maximum=max(maximum,end)
+            self.maximum_ends.append(maximum)
+
+    def overlaps(self,start,end):
+        index=bisect_left(self.starts,end)-1
+        return index>=0 and self.maximum_ends[index]>start
+
+    def add(self,start,end):
+        """Add one late audit target without rebuilding every range list."""
+        index=bisect_left(self.starts,start)
+        maximum=max(end,self.maximum_ends[index-1] if index else -1)
+        self.starts.insert(index,start)
+        self.maximum_ends.insert(index,maximum)
+        for i in range(index+1,len(self.maximum_ends)):
+            if self.maximum_ends[i]>=maximum:break
+            self.maximum_ends[i]=maximum
+
+
+class _OccupiedIndex:
+    """Mutable, non-overlapping accepted conversion ranges.
+
+    Mixed-origin ranges and accepted upstream segments must not overlap; use
+    two immediate neighbors for exact overlap checks without scanning every
+    preceding segment. Keep the source-range list in original insertion order
+    for downstream loanword collection.
+    """
+    def __init__(self,ranges):
+        ordered=sorted(ranges)
+        self.ordered=list(ordered)
+        self.starts=[a for a,_ in ordered]
+
+    def overlaps(self,start,end):
+        index=bisect_left(self.starts,start)
+        return ((index>0 and self.ordered[index-1][1]>start) or
+                (index<len(self.ordered) and self.ordered[index][0]<end))
+
+    def add(self,start,end):
+        index=bisect_left(self.starts,start)
+        self.starts.insert(index,start)
+        self.ordered.insert(index,(start,end))
+
+
 HANJA = re.compile(r'[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]')
 
 def safe_replacement(value):
@@ -73,6 +126,15 @@ class Engine:
         self.disambiguation=DisambiguationService()
         self._lock=asyncio.Lock()
         self._ready=False
+        # A single legal page can repeat the same dictionary headwords hundreds
+        # of times across independent <dd>/<li> clauses. Cache immutable
+        # dictionary results per Engine instance (reset when the DB reloads).
+        self._candidate_cache={}
+        self._entry_cache={}
+        self._definition_cache={}
+        self._metadata_cache={}
+        self._query_profile_ms=0.0
+
     async def initialize(self):
         async with self._lock:
             if self._ready:return
@@ -94,18 +156,104 @@ class Engine:
     async def tokens(self,text):
         await self.initialize()
         return await self.tokenizer.tokenize_async(text)
+    @staticmethod
+    def _put_cached(cache,requested,data,max_items=8192):
+        if len(cache)+len(requested)>max_items:cache.clear()
+        for key in requested:
+            cache[key]=data.get(key,None)
+
+    async def lookup_candidates_cached(self,forms):
+        await self.initialize()
+        if self.dictionary is None:return await self.lookup_fn(forms)
+        forms=list(dict.fromkeys(forms))
+        missing=[form for form in forms if form not in self._candidate_cache]
+        if missing:
+            query_started=perf_counter()
+            result=await self.lookup_fn(missing)
+            self._query_profile_ms+=(perf_counter()-query_started)*1000
+            self._put_cached(self._candidate_cache,missing,result)
+        # Return fresh dictionaries: converter/scoring code must never be able
+        # to modify cached raw records used by a different paragraph.
+        return {form:[dict(row) for row in (self._candidate_cache.get(form) or [])]
+                for form in forms}
+
     async def lookup_entries(self,forms,*,filter_people=False):
         await self.initialize()
-        if self.dictionary is None: return {f:[] for f in forms}
-        db=await self.dictionary.get_connection()
-        try:
-            entries=await self.dictionary.batch_lookup_entries(forms,db)
-            return {f:[r for r in records if not is_dictionary_person(r)] for f,records in entries.items()} if filter_people else entries
-        finally:
-            await db.close()
-    async def analyze(self,text,modes):
+        if self.dictionary is None:return {f:[] for f in forms}
+        forms=list(dict.fromkeys(forms))
+        missing=[f for f in forms if f not in self._entry_cache]
+        if missing:
+            query_started=perf_counter()
+            db=await self.dictionary.get_connection()
+            try:records=await self.dictionary.batch_lookup_entries(missing,db)
+            finally:
+                if hasattr(self.dictionary,'release_connection'):
+                    await self.dictionary.release_connection(db)
+                else:await db.close()
+            self._query_profile_ms+=(perf_counter()-query_started)*1000
+            self._put_cached(self._entry_cache,missing,records)
+        entries={f:[dict(row) for row in (self._entry_cache.get(f) or [])]
+                 for f in forms}
+        return {f:[r for r in records if not is_dictionary_person(r)]
+                for f,records in entries.items()} if filter_people else entries
+
+    async def cached_definitions(self,entry_ids):
+        if self.dictionary is None:return {}
+        keys=list(dict.fromkeys(i for i in entry_ids if i is not None))
+        missing=[i for i in keys if i not in self._definition_cache]
+        if missing:
+            query_started=perf_counter()
+            rows=await self.dictionary.get_definitions_for_entries(missing)
+            self._query_profile_ms+=(perf_counter()-query_started)*1000
+            self._put_cached(self._definition_cache,missing,rows)
+        return {key:list(self._definition_cache[key])
+                for key in keys if self._definition_cache.get(key) is not None}
+
+    async def cached_metadata(self,entry_ids):
+        if self.dictionary is None:return {}
+        keys=list(dict.fromkeys(i for i in entry_ids if i is not None))
+        missing=[i for i in keys if i not in self._metadata_cache]
+        if missing:
+            query_started=perf_counter()
+            rows=await self.dictionary.get_metadata_for_entries(missing)
+            self._query_profile_ms+=(perf_counter()-query_started)*1000
+            self._put_cached(self._metadata_cache,missing,rows)
+        return {key:dict(self._metadata_cache[key])
+                for key in keys if self._metadata_cache.get(key) is not None}
+    async def analyze(self,text,modes,progress=None):
         if len(text)>20000:raise ValueError('Text exceeds 20,000 characters')
+        analyzed_at=perf_counter()
+        # Checkpoints only run for long texts at existing batch/loop
+        # boundaries. No per-token messages, extra lookups, or fake heartbeats.
+        long_progress=progress is not None and len(text)>=1000
+        phase_starts={}
+        checkpoint_part=None
+        checkpoint_sent_at=analyzed_at
+        checkpoint_part_started_at=analyzed_at
+        def phase(name,event,**extra):
+            if not long_progress:return
+            now=perf_counter()
+            if event=='start':phase_starts[name]=now
+            elif event=='done':
+                extra['elapsedMs']=round((now-phase_starts.get(name,now))*1000,1)
+            progress({'stage':'analysis-phase','phase':name,'event':event,**extra})
+        def checkpoint(name,part,processed,total):
+            nonlocal checkpoint_part,checkpoint_sent_at,checkpoint_part_started_at
+            if not long_progress or total<=0:return
+            now=perf_counter()
+            key=(name,part)
+            switched=key!=checkpoint_part
+            if switched:
+                checkpoint_part=key
+                checkpoint_part_started_at=now
+            elif now-checkpoint_sent_at<0.35:return
+            checkpoint_sent_at=now
+            progress({'stage':'analysis-phase','phase':name,'event':'checkpoint',
+                      'substep':part,'processed':processed,'total':total,
+                      'substepElapsedMs':round((now-checkpoint_part_started_at)*1000,1)})
         await self.initialize()
+        initialized_at=perf_counter()
+        self._query_profile_ms=0.0
         review_all=bool(modes.get('reviewAll',False))
         # Selective audit: review positive local conversions, but do NOT resurrect
         # locally rejected/nonconversion senses or turn unchanged words into targets.
@@ -114,7 +262,7 @@ class Engine:
         # Filter a working view, never mutate the imported dictionary or its
         # globally cached candidate lists. Raw lookups still power name protection.
         async def conversion_lookup(forms):
-            result=await self.lookup_fn(forms)
+            result=await self.lookup_candidates_cached(forms)
             if not filter_dictionary_people:return result
             return {form:[record for record in records if not is_dictionary_person(record)]
                     for form,records in result.items()}
@@ -123,16 +271,33 @@ class Engine:
         # for general conversion. Exact mixed/cross-origin words have a
         # complete whole-entry choice path below, before source projection.
         converter=ConverterService(self.tokenizer,self.disambiguation)
+        phase('kiwi','start')
         tokens=await self.tokens(text)
-        segments,_=await converter.convert(text,conversion_lookup,tokens=tokens)
+        tokenized_at=perf_counter()
+        phase('kiwi','done',tokenCount=len(tokens))
+        phase('converter','start')
+        segments,_=await converter.convert(text,conversion_lookup,tokens=tokens,
+                                           progress=(lambda part,done,total:checkpoint('converter',part,done,total)) if long_progress else None)
+        converted_at=perf_counter()
+        phase('converter','done',segmentCount=len(segments))
+        phase('names','start')
+        # Both name protection and mixed-origin scanning previously rebuilt
+        # these same source-aligned compound spans independently.
+        from backend.mixed_origins import candidate_spans
+        shared_spans=candidate_spans(text,tokens)
+        # Preserve the first Kiwi token at each exact span, without searching
+        # the full source token array for every converted/reviewed word.
+        token_by_span={}
+        for token in tokens:
+            token_by_span.setdefault((token.start,token.start+token.length),token)
         dictionary_names,homograph_evidence,known_person_hanja=await dictionary_name_evidence(
-            text,tokens,self.lookup_fn,include_person_hanja=True)
+            text,tokens,self.lookup_candidates_cached,include_person_hanja=True,spans=shared_spans)
         proper_ranges=proper_noun_ranges(tokens)+dictionary_names
         name_protection=modes.get('nameProtection',True) is not False
         homograph_evidence=homograph_evidence if name_protection else []
         conflicting_ranges=[(a,b) for a,b,_,_ in homograph_evidence]
         protected_dictionary_names=[(a,b) for a,b in dictionary_names if (a,b) not in conflicting_ranges]
-        inferred_names,surname_ambiguities=await surname_name_evidence(text,tokens,self.lookup_fn) if name_protection else ([],[])
+        inferred_names,surname_ambiguities=await surname_name_evidence(text,tokens,self.lookup_candidates_cached) if name_protection else ([],[])
         protected_names=sorted(set(inferred_names+protected_dictionary_names)) if name_protection else []
         homograph_evidence=[item for item in homograph_evidence if not any(a<=item[0] and item[1]<=b for a,b in protected_names)]
         surname_ambiguities=[item for item in surname_ambiguities if not any(a<item[1] and item[0]<b for a,b in protected_names+dictionary_names)]
@@ -142,38 +307,59 @@ class Engine:
         homograph_targets=[homograph_target(text,a,b,word,[r for r in records if not filter_dictionary_people or not is_dictionary_person(r)],modes) for a,b,word,records in homograph_evidence]
         suspect_targets=[surname_ambiguity_target(text,a,b,word,[r for r in records if not filter_dictionary_people or not is_dictionary_person(r)],modes) for a,b,word,records in surname_ambiguities]
         blocked_for_local=protected_names+conflicting_ranges+suspect_ranges
+        names_at=perf_counter()
+        phase('names','done',protectedNameCount=len(protected_names))
+        phase('mixed','start')
         upstream_counts={f'upstream_{status}':sum(s.status==status for s in segments) for status in ('converted','ambiguous','no_match','kept')}
         mixed=dict(annotations=[],targets=[],ranges=[],skipped_mixed=0)
         if self.dictionary is not None and (modes.get('hanja',True) or modes.get('loanword',False)):
             from backend.mixed_origins import collect_mixed
             whole_word_ranges=[(s.start,s.end) for s in segments if s.selection_reason in ('whole_word_match','whole_word_keep_competition')]
-            mixed=await collect_mixed(self,text,tokens,{**modes,'reviewAll':review_conversions},whole_word_ranges=whole_word_ranges,blocked_ranges=blocked_for_local,review_ranges=dictionary_names)
+            mixed=await collect_mixed(self,text,tokens,{**modes,'reviewAll':review_conversions},whole_word_ranges=whole_word_ranges,blocked_ranges=blocked_for_local,review_ranges=dictionary_names,spans=shared_spans,
+                                      progress=(lambda part,done,total:checkpoint('mixed',part,done,total)) if long_progress else None)
+        mixed_at=perf_counter()
+        phase('mixed','done',mixedTargetCount=len(mixed['targets']))
+        phase('target_choices','start')
         annotations=list(mixed['annotations']); reviews=[]; occupied=list(mixed['ranges']); rejected=0
+        mixed_index=_SpanIndex(mixed['ranges'])
+        occupied_index=_OccupiedIndex(occupied)
         def valid(start,end,surface):return isinstance(start,int) and isinstance(end,int) and 0<=start<end<=len(text) and text[start:end]==surface
-        for s in segments:
+        if long_progress:checkpoint('target_choices','segments',0,len(segments))
+        for segment_idx,s in enumerate(segments):
+            if long_progress and segment_idx and not (segment_idx & 127):
+                checkpoint('target_choices','segments',segment_idx,len(segments))
             if overlaps_proper_noun(s.start,s.end,blocked_for_local):continue
             if s.status not in ('converted','ambiguous'):continue
-            if any(s.start<b and a<s.end for a,b in mixed['ranges']):continue
+            if mixed_index.overlaps(s.start,s.end):continue
             if not valid(s.start,s.end,s.original):rejected+=1;continue
             if s.status=='converted' and not review_conversions and not overlaps_proper_noun(s.start,s.end,proper_ranges):
-                if not safe_replacement(s.display_text) or any(s.start<b and a<s.end for a,b in occupied):rejected+=1;continue
+                if not safe_replacement(s.display_text) or occupied_index.overlaps(s.start,s.end):rejected+=1;continue
                 occupied.append((s.start,s.end))
-                token=next((t for t in tokens if t.start==s.start and t.start+t.length==s.end),None)
+                occupied_index.add(s.start,s.end)
+                token=token_by_span.get((s.start,s.end))
                 selected=next((c for c in s.candidates if c.get('entry_id')==s.matched_entry_id),{})
                 if modes.get('hanja',True):annotations.append(dict(start=to_utf16(text,s.start),end=to_utf16(text,s.end),surface=s.original,type='hanja',replacement=restore_mixed_display(s.original,s.display_text,s.origin_raw,token=token,written_form=selected.get('written_form'))))
             else:reviews.append((s.start,s.end,s.original,s.candidates))
         # Only review needs tokens to reproduce the original display builder.
-        review_tokens=tokens if reviews else []
-        definitions_by_entry=await self.dictionary.get_definitions_for_entries([c.get('entry_id') for _,_,_,candidates in reviews for c in candidates]) if self.dictionary is not None else {}
+        review_tokens=token_by_span if reviews else {}
+        # Match non-converting dictionary senses to exact component spans in
+        # O(1) instead of rescanning all review segments for every target.
+        review_candidates_by_span={}
+        for start,end,_,candidates in reviews:
+            review_candidates_by_span.setdefault((start,end),[]).extend(candidates)
+        definitions_by_entry=await self.cached_definitions([c.get('entry_id') for _,_,_,candidates in reviews for c in candidates]) if self.dictionary is not None else {}
         choices=[]
-        for start,end,surface,candidates in reviews:
+        if long_progress:checkpoint('target_choices','reviews',0,len(reviews))
+        for review_idx,(start,end,surface,candidates) in enumerate(reviews):
+            if long_progress and review_idx and not (review_idx & 127):
+                checkpoint('target_choices','reviews',review_idx,len(reviews))
             if not valid(start,end,surface):rejected+=1;continue
-            if any(start<b and a<end for a,b in occupied):continue
+            if occupied_index.overlaps(start,end):continue
             for c in candidates:
                 replacement=c.get('replacement')
                 if (not review_conversions and not overlaps_proper_noun(start,end,proper_ranges) and not c.get('is_reliable')) or not safe_replacement(replacement):continue
                 # Preserve inflected Korean suffixes using unchanged upstream display builder.
-                token=next((t for t in review_tokens if t.start==start and t.start+t.length==end),None)
+                token=review_tokens.get((start,end))
                 if token is not None:
                     from app.services.disambiguation import CandidateScore
                     score=CandidateScore(**{k:c.get(k) for k in CandidateScore.__dataclass_fields__ if k in c})
@@ -182,9 +368,16 @@ class Engine:
                 replacement=restore_mixed_display(surface,replacement,c.get('origin_raw'),token=token,written_form=c.get('written_form'))
                 if safe_replacement(replacement):choices.append((start,end,replacement,c.get('entry_id')))
         components=[]
+        component_end=-1
         for choice in sorted(set(choices)):
-            if not components or choice[0]>=max(x[1] for x in components[-1]):components.append([choice])
-            else:components[-1].append(choice)
+            # Connected components depend on the maximal END so far, not the
+            # immediately preceding choice end; track it incrementally.
+            if not components or choice[0]>=component_end:
+                components.append([choice])
+                component_end=choice[1]
+            else:
+                components[-1].append(choice)
+                component_end=max(component_end,choice[1])
         targets=[]
         if modes.get('hanja',True):
             for number,component in enumerate(components):
@@ -192,16 +385,14 @@ class Engine:
                 options=[dict(choice_id='KEEP',type='keep',replacement=text[start:end],entry_id=None,definitions=[])]
                 if self.dictionary is not None:
                     # Dictionary readings that preserve Korean are explicit sense options.
-                    for a,b,_,candidates in reviews:
-                        # A sense of a subspan cannot explain the whole merged
-                        # occurrence. In particular 이 is not a sense of 중이.
-                        if a!=start or b!=end:continue
-                        for candidate in candidates:
-                            if safe_replacement(candidate.get('replacement')) or not is_nonconversion_origin(candidate.get('origin_raw'),loanword=modes.get('loanword',False)):continue
-                            if not review_all and 'pos_mismatch' in (candidate.get('selection_reason') or ''):continue
-                            entry=candidate.get('entry_id')
-                            if entry is None:continue
-                            options.extend(nonconversion_options(text[start:end],[candidate],definitions_by_entry=definitions_by_entry,loanword=modes.get('loanword',False)))
+                    # A sense of a subspan cannot explain the whole merged
+                    # occurrence; only exact (start,end) senses compete.
+                    for candidate in review_candidates_by_span.get((start,end),()):
+                        if safe_replacement(candidate.get('replacement')) or not is_nonconversion_origin(candidate.get('origin_raw'),loanword=modes.get('loanword',False)):continue
+                        if not review_all and 'pos_mismatch' in (candidate.get('selection_reason') or ''):continue
+                        entry=candidate.get('entry_id')
+                        if entry is None:continue
+                        options.extend(nonconversion_options(text[start:end],[candidate],definitions_by_entry=definitions_by_entry,loanword=modes.get('loanword',False)))
                 # Each fixed option changes one candidate span and preserves the rest of the connected region.
                 for n,(a,b,replacement,entry) in enumerate(component):
                     if self.dictionary is not None:
@@ -210,6 +401,9 @@ class Engine:
                         definitions=[]
                     options.append(dict(choice_id=f'c{n}',type='hanja',replacement=text[start:a]+replacement+text[b:end],entry_id=entry,definitions=definitions))
                 targets.append(dict(target_id=f't{number}',start=to_utf16(text,start),end=to_utf16(text,end),surface=text[start:end],context=text,options=options))
+        prepared_targets_at=perf_counter()
+        phase('target_choices','done',targetCount=len(targets))
+        phase('loanwords','start')
         skipped_mixed=0
         token_entries=None
         if modes.get('loanword',False):
@@ -222,19 +416,23 @@ class Engine:
             skipped_mixed=loan['skipped_mixed']
             # A locally certain loan overlapping an original Hanja review becomes
             # a fixed review option instead of pre-empting that connected region.
+            hanja_target_index=_SpanIndex((t['start'],t['end']) for t in targets)
             for annotation in loan['annotations']:
-                overlapping=any(annotation['start']<t['end'] and t['start']<annotation['end'] for t in targets)
+                overlapping=hanja_target_index.overlaps(annotation['start'],annotation['end'])
                 if overlapping:
                     loan['targets'].append(dict(start=annotation['start'],end=annotation['end'],surface=annotation['surface'],context=text,options=[dict(choice_id='KEEP',type='keep',replacement=annotation['surface'],entry_id=None,definitions=[]),dict(choice_id='c0',type='loanword',replacement=annotation['replacement'],entry_id=annotation['entry_id'],definitions=annotation['definitions'])]))
                 else:annotations.append({k:v for k,v in annotation.items() if k not in ('entry_id','definitions')})
             targets=merge_targets(text,targets+loan['targets'])
+        loanwords_at=perf_counter()
+        phase('loanwords','done',targetCount=len(targets))
+        phase('audits','start')
         targets=sorted(targets+mixed['targets']+homograph_targets+suspect_targets,key=lambda t:(t['start'],t['end']))
         # Only opt-in experimental Latin review gets additional proper-name
         # targets. Keep local person protection: these are KEEP-only options,
         # never an automatic conversion or a speculative Hanja reading.
         if modes.get('experimentalLoanwordAudit',False) and modes.get('loanword',False):
-            covered=[(t['start'],t['end']) for t in targets]
-            covered += [(a['start'],a['end']) for a in annotations]
+            covered=_SpanIndex([(t['start'],t['end']) for t in targets]+
+                               [(a['start'],a['end']) for a in annotations])
             dictionary_name_spans=set(dictionary_names)
             for token in tokens:
                 a=token.start;b=a+token.length
@@ -248,12 +446,12 @@ class Engine:
                     right=next((t for t in tokens if t.start==b),None)
                     if right is None or not right.tag.startswith('J'):continue
                 start=to_utf16(text,a);end=to_utf16(text,b)
-                if any(start<y and x<end for x,y in covered):continue
+                if covered.overlaps(start,end):continue
                 targets.append(dict(target_id='latin-audit',start=start,end=end,surface=word,
                     context=text,experimental_loanword_audit=True,
                     options=[dict(choice_id='KEEP',type='keep',replacement=word,
                                   entry_id=None,definitions=[])]))
-                covered.append((start,end))
+                covered.add(start,end)
             targets.sort(key=lambda t:(t['start'],t['end']))
         # Experimental Hanja audit is independent of Kiwi segmentation repair.
         # Only complete, dictionary-uncovered Kiwi nominal spans are reviewed;
@@ -262,6 +460,8 @@ class Engine:
         if (self.dictionary is not None and modes.get('experimentalHanjaAudit',False)
                 and modes.get('hanja',False)):
             candidates=[]
+            audit_occupied=_SpanIndex([(t['start'],t['end']) for t in targets]+
+                                      [(x['start'],x['end']) for x in annotations])
             for token in tokens:
                 a=token.start;b=a+token.length
                 if token.tag.split('-')[0] not in {'NNG','NNP'}:continue
@@ -270,9 +470,7 @@ class Engine:
                 if not 2<=len(word)<=8 or not re.fullmatch(r'[가-힣]+',word) or token.form!=word:continue
                 if overlaps_proper_noun(a,b,protected_names+dictionary_names+suspect_ranges+conflicting_ranges):continue
                 start=to_utf16(text,a);end=to_utf16(text,b)
-                if any(start<y and x<end for x,y in
-                       [(t['start'],t['end']) for t in targets]+
-                       [(x['start'],x['end']) for x in annotations]):continue
+                if audit_occupied.overlaps(start,end):continue
                 candidates.append((token,a,b,word,start,end))
             if candidates:
                 # One batched dictionary lookup. When the loanword pass already
@@ -285,22 +483,23 @@ class Engine:
                 # mistakenly tagged the whole personal name as a common noun.
                 prefixes=list(dict.fromkeys(p for _,_,_,word,_,_ in unknown
                             for p in (word[:1],word[:2]) if len(p)<len(word)))
-                prefix_entries=await self.lookup_fn(prefixes) if prefixes else {}
+                prefix_entries=await self.lookup_candidates_cached(prefixes) if prefixes else {}
                 cap=max(12,min(80,len(text)//12))
                 # Prioritize ordinary nouns over uncertain proper nouns under
                 # the budget; preserve original source order for display.
                 selected=sorted(unknown,key=lambda c:(c[0].tag.split('-')[0]=='NNP',c[1]))[:cap]
+                target_index=_SpanIndex((t['start'],t['end']) for t in targets)
                 for token,a,b,word,start,end in sorted(selected,key=lambda c:c[1]):
                     if any(r.get('surname_usage') is True for p in (word[:1],word[:2])
                            if len(p)<len(word) for r in prefix_entries.get(p,[])):
                         continue
-                    if any(start<y and x<end for x,y in
-                           [(t['start'],t['end']) for t in targets]):
+                    if target_index.overlaps(start,end):
                         continue
                     targets.append(dict(target_id='hanja-audit',start=start,end=end,surface=word,
                         context=text,experimental_hanja_audit=True,
                         options=[dict(choice_id='KEEP',type='keep',replacement=word,
                                       entry_id=None,definitions=[])]))
+                    target_index.add(start,end)
                 targets.sort(key=lambda t:(t['start'],t['end']))
         # Only when dictionary-person filtering is OFF, provide exact,
         # dictionary-backed Hanja personal names as review candidates.
@@ -330,9 +529,12 @@ class Engine:
                         entry_id=record['entry_id'],definitions=record['definitions']))
                 target['dictionary_person_name']=True
             targets.sort(key=lambda t:(t['start'],t['end']))
+        audits_at=perf_counter()
+        phase('audits','done',targetCount=len(targets))
+        phase('target_finalize','start')
         # Complete every candidate, including sibling origins owned by mixed words.
-        option_definitions=await self.dictionary.get_definitions_for_entries([o['entry_id'] for t in targets for o in t['options'] if o['type']!='keep']) if self.dictionary is not None else {}
-        option_metadata=await self.dictionary.get_metadata_for_entries(option_definitions) if self.dictionary is not None else {}
+        option_definitions=await self.cached_definitions([o['entry_id'] for t in targets for o in t['options'] if o['type']!='keep']) if self.dictionary is not None else {}
+        option_metadata=await self.cached_metadata(option_definitions) if self.dictionary is not None else {}
         filtered_person_only=set()
         for target in targets:
             native=[];conversions=[];seen=set()
@@ -361,12 +563,33 @@ class Engine:
         # Encode each token boundary once, not once per review target.
         # This retains the existing surrogate/astral offset conversion exactly.
         token_morphology=[dict(form=t.form,tag=t.tag,start=to_utf16(text,t.start),end=to_utf16(text,t.start+t.length)) for t in tokens]
+        # Token ranges usually follow source order. Use binary search once
+        # per target instead of searching the entire long document repeatedly.
+        token_ends=[m['end'] for m in token_morphology]
+        monotonic_tokens=all(token_morphology[i-1]['start']<=token_morphology[i]['start']
+                             and token_ends[i-1]<=token_ends[i]
+                             for i in range(1,len(token_morphology)))
         proper_utf16=[(to_utf16(text,a),to_utf16(text,b)) for a,b in proper_ranges]
         dictionary_name_utf16=[(to_utf16(text,a),to_utf16(text,b)) for a,b in dictionary_names]
+        if long_progress:checkpoint('target_finalize','targets',0,len(targets))
         for i,target in enumerate(targets):
+            if long_progress and i and not (i & 127):
+                checkpoint('target_finalize','targets',i,len(targets))
             target['target_id']=f't{i}'
             a=target['start'];b=target['end']
-            target['morphology']=[dict(m) for m in token_morphology if m['start']<b and a<m['end']]
+            if monotonic_tokens:
+                first=bisect_right(token_ends,a)
+                matching=[]
+                while first<len(token_morphology):
+                    m=token_morphology[first]
+                    if m['start']>=b:break
+                    if a<m['end']:matching.append(dict(m))
+                    first+=1
+                target['morphology']=matching
+            else:
+                # Overlapping or out-of-order tokenizers keep original logic.
+                target['morphology']=[dict(m) for m in token_morphology
+                                      if m['start']<b and a<m['end']]
             if overlaps_proper_noun(target['start'],target['end'],proper_utf16):target['proper_noun']=True
             if overlaps_proper_noun(target['start'],target['end'],dictionary_name_utf16):target['dictionary_person_name']=True
         # Expose Kiwi's actual proposal and conservative name/proper-noun
@@ -380,7 +603,22 @@ class Engine:
             repair_context={'repair_context':{
                 'kiwi_tokens':token_morphology,
                 'protected_ranges':[list(item) for item in protected]}}
-        return dict(engine_version=ENGINE_VERSION,dictionary_fingerprint=self.fingerprint,annotations=annotations,targets=targets,**repair_context,stats=dict(local_determined=len(annotations),pending=len(targets),protected_names=len(protected_names),structural_rejections=rejected,skipped_mixed=skipped_mixed+mixed['skipped_mixed'],**upstream_counts))
+        finished_at=perf_counter()
+        phase('target_finalize','done',targetCount=len(targets))
+        timing_ms={k:round(v,3) for k,v in dict(
+            initialize=(initialized_at-analyzed_at)*1000,
+            kiwi=(tokenized_at-initialized_at)*1000,
+            converter=(converted_at-tokenized_at)*1000,
+            names=(names_at-converted_at)*1000,
+            mixed=(mixed_at-names_at)*1000,
+            targets=(finished_at-mixed_at)*1000,
+            target_choices=(prepared_targets_at-mixed_at)*1000,
+            loanwords=(loanwords_at-prepared_targets_at)*1000,
+            audits=(audits_at-loanwords_at)*1000,
+            target_finalize=(finished_at-audits_at)*1000,
+            sqlite_queries=self._query_profile_ms,
+            total=(finished_at-analyzed_at)*1000).items()}
+        return dict(engine_version=ENGINE_VERSION,dictionary_fingerprint=self.fingerprint,annotations=annotations,targets=targets,**repair_context,stats=dict(timings_ms=timing_ms,token_count=len(tokens),option_count=sum(len(t['options']) for t in targets),segment_count=len(segments),local_determined=len(annotations),pending=len(targets),protected_names=len(protected_names),structural_rejections=rejected,skipped_mixed=skipped_mixed+mixed['skipped_mixed'],**upstream_counts))
 
 _default_engine=None
 async def analyze(text: str,modes: dict) -> dict:
