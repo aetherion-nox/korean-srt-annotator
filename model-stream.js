@@ -2,9 +2,9 @@ import {literalOriginOption} from './experimental-options.js';
 // Protocol-specific SSE envelopes share one byte/framing reader. Reasoning is
 // retained only in the opt-in log, never parsed as dictionary choices.
 function streamError(message,detail=''){const e=Error(message);e.detail=detail;return e;}
-export function choicePreviewParser(targets,onPreview,resolveExtra=()=>null){
+export function choicePreviewParser(targets,onPreview,resolveExtra=()=>null,config={}){
  const known=new Map(targets.map(t=>[t.target_id,t]));
- let text='',position=0,array=false,start=-1,depth=0,string=false,escape=false,invalid=false;
+ let text='',position=0,array=false,start=-1,depth=0,string=false,escape=false;
  const rows=[];
  return chunk=>{
   text+=chunk;
@@ -16,22 +16,35 @@ export function choicePreviewParser(targets,onPreview,resolveExtra=()=>null){
    if(ch==='"'){string=true;continue;}
    if(ch==='{'){if(depth===0)start=position;depth++;}
    else if(ch==='}'&&depth){depth--;if(depth===0){
-    let row;try{row=JSON.parse(text.slice(start,position+1));}catch{invalid=true;}
-    if(!row||typeof row!=='object'||Object.keys(row).sort().join(',')!=='c,t'||
-       !known.has(row.t)||rows.some(r=>r.t===row.t)||
-       !(row.c===null||(typeof row.c==='string'&&row.c.length>0)))invalid=true;
-    if(row)rows.push(row);changed=true;
+    let row;try{row=JSON.parse(text.slice(start,position+1));}catch{}
+    // Malformed rows are skipped; only complete well-formed t/c rows
+    // participate in duplicate detection in the final reviewer and preview.
+    if(row&&typeof row==='object'&&!Array.isArray(row)&&
+       Object.keys(row).sort().join(',')==='c,t'&&
+       typeof row.t==='string'&&known.has(row.t)&&
+       (row.c===null||typeof row.c==='string'&&row.c.trim().length>0)){
+     rows.push(row);changed=true;
+    }
    }}else if(ch===']'&&depth===0){position=text.length;break;}
   }
-  if(changed){const accepted=invalid?[]:rows.flatMap(row=>{
+  if(changed){
+   const unique=new Map(),ambiguous=new Set();
+   for(const row of rows){
+    const existing=unique.get(row.t);
+    if(existing&&existing.c!==row.c)ambiguous.add(row.t);
+    else if(!existing)unique.set(row.t,row);
+   }
+   const accepted=[...unique.values()].filter(row=>!ambiguous.has(row.t)).flatMap(row=>{
    const target=known.get(row.t);
    const selected=row.c===null?null:target?.options.find(o=>o.type!=='keep'&&(
      o.choice_id===row.c||(target.dictionary_person_name===true&&
        target.verified_person_hanja?.includes(row.c)&&o.type==='hanja'&&o.replacement===row.c)));
    // Match final validation: unknown c/n indexes are null (keep Korean).
-   const keep=row.c===null||(!selected&&typeof row.c==='string'&&/^[cn]\d+$/u.test(row.c));
+   const keep=row.c===null||typeof row.c==='string'&&row.c.toLowerCase()==='null'||
+      (config.discardInvalidReviewResults!==true&&!selected&&typeof row.c==='string'&&/^[cn]\d+$/u.test(row.c));
    const option=(keep?target?.options.find(o=>o.type==='keep'):null)||
-     selected||resolveExtra(target,row.c)||target?.options.find(o=>o.type==='keep');
+     selected||resolveExtra(target,row.c)||
+      (config.discardInvalidReviewResults===true?null:target?.options.find(o=>o.type==='keep'));
    // Preview and final application must agree; an invalid origin is a
    // no-conversion result, never a speculative annotation.
    return option?[{target,option}]:[];
@@ -41,7 +54,7 @@ export function choicePreviewParser(targets,onPreview,resolveExtra=()=>null){
 // A literal etymology uses the same results[] streaming path as an existing
 // choice_id. Validate each *complete* row locally before provisional display.
 export function experimentalChoicePreviewParser(targets,config,onPreview){
- return choicePreviewParser(targets,onPreview,(target,id)=>literalOriginOption(target,id,config));
+ return choicePreviewParser(targets,onPreview,(target,id)=>literalOriginOption(target,id,config),config);
 }
 
 export async function readModelContent(response,{protocol='chat',signal,onStarted=()=>{},onDelta=()=>{},onRaw=()=>{},onMetadata=()=>{},maxContentChars=2_000_000}={}){

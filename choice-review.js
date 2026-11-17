@@ -6,20 +6,22 @@ import {requestLogger} from './request-log.js';
 import './model-catalog.js';
 import {buildReviewPayload,buildReviewInstructions} from './review-payload.js';
 import {literalOriginOption,explainLiteralOriginRejection} from './experimental-options.js';
+import {summarizeExperimentalHanjaAnswers} from './experimental-hanja-diagnostics.js';
 import {validateSegmentationRepairs} from './segmentation-repairs.js';
 import {normalizeOutputTokenLimit,describeBatchBudget} from './batch-budget.js';
 import {requestTimeoutGuard} from './request-timeout.js';
+import {parsePartialReviewJson} from './partial-review-json.js';
 // Response rows have one wire format only: {t, c}. The special null
 // c means keep the source. A string "KEEP" is NOT a fallback marker.
 function validWireRow(row,known){
  return row&&typeof row==='object'&&!Array.isArray(row)&&
   Object.keys(row).sort().join(',')==='c,t'&&
   typeof row.t==='string'&&known.has(row.t)&&
-  (row.c===null||(typeof row.c==='string'&&row.c.length>0));
+  (row.c===null||(typeof row.c==='string'&&row.c.trim().length>0));
 }
 function matchedWireOption(target,value,config){
  const options=filterReviewTarget(target,config).options;
- if(value===null)return options.find(o=>o.type==='keep')||null;
+ if(value===null||typeof value==='string'&&value.toLowerCase()==='null')return options.find(o=>o.type==='keep')||null;
  const selected=options.find(o=>o.type!=='keep'&&o.choice_id===value);
  // A literal Hanja personal name is permitted ONLY when the local dictionary
  // supplied that exact writing for this full occurrence. Treat it as the
@@ -33,49 +35,106 @@ function matchedWireOption(target,value,config){
  // ordinary and experimental modes. Authentic literal origins remain distinct.
  if(selected)return readingCompatibleModelChoice(target,selected,config)?selected:
   options.find(o=>o.type==='keep')||null;
- return typeof value==='string'&&/^[cn]\d+$/u.test(value)?
-  options.find(o=>o.type==='keep')||null:null;
+ if(typeof value==='string'&&/^[cn]\d+$/u.test(value)){
+  const hasDictionary=options.some(o=>o.type!=='keep');
+  if(config.discardInvalidReviewResults===true||config.retryInvalidDictionaryChoices!==false&&hasDictionary)return null;
+  return options.find(o=>o.type==='keep')||null;
+ }
+ return null;
+}
+// Only numbered c/n dictionary IDs are automatically corrected. Free-form
+// experimental origins retain their existing independent safety fallback.
+function wrongDictionaryId(target,value,config){
+ return config.discardInvalidReviewResults!==true&&config.retryInvalidDictionaryChoices!==false&&typeof value==='string'&&
+  /^[cn]\d+$/u.test(value)&&
+  filterReviewTarget(target,config).options.some(o=>o.type!=='keep')&&
+  !filterReviewTarget(target,config).options.some(o=>o.type!=='keep'&&o.choice_id===value);
+}
+// Only structurally valid t/c rows participate in duplicate detection.
+// Missing/malformed-only targets keep Korean in discard mode.
+function implicitNullChoice(target,rows,config){
+ if(config.discardInvalidReviewResults!==true)return null;
+ if(rows.length!==0)return null;
+ const option=target.options.find(o=>o.type==='keep');
+ return option?{target,option,implicitNull:true}:null;
+}
+function discardedChoice(target,config){
+ if(config.discardInvalidReviewResults!==true)return null;
+ const option=target.options.find(o=>o.type==='keep');
+ return option?{target,option,discardedInvalid:true}:null;
+}
+function ambiguousRepeatedRows(rows){
+ return rows.length>1&&rows.some(row=>row.c!==rows[0].c);
+}
+function groupedRows(targets,response,config){
+ const known=new Map(targets.map(t=>[t.target_id,t])),result=new Map();
+ const rows=Array.isArray(response?.results)?response.results:[];
+ if((!response||!Array.isArray(response.results))&&config.discardInvalidReviewResults===true)
+  return result;
+ if(!response||!Array.isArray(response.results)||Object.hasOwn(response,'experimental_options'))
+  return null;
+ if(config.discardInvalidReviewResults!==true&&config.retryInvalidDictionaryChoices===false&&rows.some(row=>!validWireRow(row,new Set(known.keys()))))
+  return null;
+ // Filter malformed rows first. Exact repeated t/c values count as one;
+ // conflicting c values for a known t invalidate the target.
+ const knownIds=new Set(known.keys());
+ for(const row of rows){
+  if(!validWireRow(row,knownIds))continue;
+  if(!result.has(row.t))result.set(row.t,[]);
+  result.get(row.t).push(row);
+ }
+ return result;
 }
 export function validateChoices(targets,response,config={}){
- const accepted=[],unresolved=[];
- const rows=Array.isArray(response?.results)?response.results:[];
- const known=new Set(targets.map(t=>t.target_id));
- if(!response||!Array.isArray(response.results)||Object.hasOwn(response,'experimental_options')||
-    rows.some(row=>!validWireRow(row,known)))
-  return {accepted:[],unresolved:targets};
+ const accepted=[],unresolved=[],invalidDictionaryChoiceIds=[];
+ const grouped=groupedRows(targets,response,config);
+ if(!grouped)return {accepted:[],unresolved:targets,invalidDictionaryChoiceIds:[]};
  for(const target of targets){
-  const matches=rows.filter(row=>row.t===target.target_id);
-  // A uniquely identified result with an unusable choice is safe to leave
-  // untouched. Structural problems (unknown/duplicate/missing t) are not.
-  const option=matches.length===1?matchedWireOption(target,matches[0].c,config)||target.options.find(o=>o.type==='keep'):null;
-  if(option){
-   // Previous diagnostics counted invalid c/n keys as ordinary KEEP.
-   // Preserve the safe null fallback, but disclose its actual frequency.
-   const invalidChoiceFallback=matches[0].c!==null&&option.type==='keep';
-   accepted.push(invalidChoiceFallback?{target,option,invalidChoiceFallback:true}:{target,option});
-  }else unresolved.push(target);
+  const rows=grouped.get(target.target_id)||[];
+  const implicit=implicitNullChoice(target,rows,config);
+  if(implicit){accepted.push(implicit);continue;}
+  if(rows.length===0||ambiguousRepeatedRows(rows)||!validWireRow(rows[0],new Set([target.target_id]))){
+   const dropped=discardedChoice(target,config);
+   if(dropped)accepted.push(dropped);else unresolved.push(target);
+   continue;
+  }
+  const value=rows[0].c;
+  if(wrongDictionaryId(target,value,config)){
+   unresolved.push(target);invalidDictionaryChoiceIds.push(target.target_id);continue;
+  }
+  const selected=matchedWireOption(target,value,config);
+   const option=selected||(config.discardInvalidReviewResults===true?null:target.options.find(o=>o.type==='keep'));
+  if(!option){const dropped=discardedChoice(target,config);if(dropped)accepted.push(dropped);else unresolved.push(target);continue;}
+  const invalidChoiceFallback=value!==null&&option.type==='keep';
+  accepted.push(invalidChoiceFallback?{target,option,invalidChoiceFallback:true}:{target,option});
  }
- return {accepted,unresolved};
+ return {accepted,unresolved,invalidDictionaryChoiceIds};
 }
 export function validateExperimentalChoices(targets,response,config={}){
- if(!response||!Array.isArray(response.results)||Object.hasOwn(response,'experimental_options'))
-  return {accepted:[],unresolved:targets,experimentalAccepted:0,experimentalProposed:0,experimentalRejected:0};
- const rows=response.results,known=new Set(targets.map(t=>t.target_id));
- if(rows.some(row=>!validWireRow(row,known)))
-  return {accepted:[],unresolved:targets,experimentalAccepted:0,experimentalProposed:0,experimentalRejected:rows.length};
- const accepted=[],unresolved=[];let experimentalAccepted=0,experimentalRejected=0;
+ const grouped=groupedRows(targets,response,config);
+ if(!grouped)return {accepted:[],unresolved:targets,experimentalAccepted:0,experimentalProposed:0,experimentalRejected:0,invalidDictionaryChoiceIds:[]};
+ const accepted=[],unresolved=[],invalidDictionaryChoiceIds=[];
+ let experimentalAccepted=0,experimentalRejected=0;
  const rejectionCounts={},rejectionSamples=[];
  for(const target of targets){
-  const matches=rows.filter(row=>row.t===target.target_id);
-  if(matches.length!==1){unresolved.push(target);continue;}
-  const id=matches[0].c;
+  const rows=grouped.get(target.target_id)||[];
+  const implicit=implicitNullChoice(target,rows,config);
+  if(implicit){accepted.push(implicit);continue;}
+  if(rows.length===0||ambiguousRepeatedRows(rows)||!validWireRow(rows[0],new Set([target.target_id]))){
+   const dropped=discardedChoice(target,config);
+   if(dropped)accepted.push(dropped);else unresolved.push(target);
+   continue;
+  }
+  const id=rows[0].c;
+  if(wrongDictionaryId(target,id,config)){
+   unresolved.push(target);invalidDictionaryChoiceIds.push(target.target_id);continue;
+  }
   const option=matchedWireOption(target,id,config);
   if(option){accepted.push({target,option});continue;}
   const generated=literalOriginOption(target,id,config);
   if(generated){accepted.push({target,option:generated});experimentalAccepted++;}
   else{
-   // Reject the proposed origin, not the whole target. The original Korean
-   // remains unchanged when an experimental spelling is unsafe/unavailable.
+   if(config.discardInvalidReviewResults===true){const dropped=discardedChoice(target,config);if(dropped)accepted.push(dropped);else unresolved.push(target);experimentalRejected++;continue;}
    const keep=target.options.find(o=>o.type==='keep');
    if(keep)accepted.push({target,option:keep});else unresolved.push(target);
    experimentalRejected++;
@@ -84,7 +143,8 @@ export function validateExperimentalChoices(targets,response,config={}){
    if(rejectionSamples.length<16)rejectionSamples.push({target_id:target.target_id,surface:target.surface,c:id,reason});
   }
  }
- return {accepted,unresolved,experimentalAccepted,experimentalProposed:experimentalAccepted,experimentalRejected,rejectionCounts,rejectionSamples};
+ return {accepted,unresolved,invalidDictionaryChoiceIds,
+  experimentalAccepted,experimentalProposed:experimentalAccepted,experimentalRejected,rejectionCounts,rejectionSamples};
 }
 export function thinkingSettings(config){
  const capability=globalThis.KRA_MODEL_CATALOG.resolve(config);
@@ -104,8 +164,9 @@ export function thinkingSettings(config){
   const level=enabled?effort:'none';
   return {body:{reasoning_effort:level},label:enabled?`思考强度：${level}`:'关闭思考'};
  }
- // Tencent TokenHub supports explicit thinking toggles for Hy4 Flash, Hy4,
- // Hy4 Preview and Hy3. Hy3 accepts low/high/no_think; Hy4 family high/no_think.
+ // Tencent TokenHub supports the same explicit thinking switch for
+ // Hy4 Flash, Hy4, Hy4 Preview and Hy3. The accepted effort levels differ:
+ // Hy3: low/high/no_think; Hy4 family: high/no_think.
  if(provider==='hunyuan'){
   const body={thinking:{type:enabled?'enabled':'disabled'}};
   if(capability.efforts.length)body.reasoning_effort=enabled?effort:'no_think';
@@ -123,11 +184,15 @@ export function safeDetail(value,config={}){
  return text.replace(/Bearer\s+[^\s"'<>]+/gi,'Bearer [REDACTED]').replace(/sk-[A-Za-z0-9_-]+/g,'[REDACTED]').slice(0,3000);
 }
 export function modelTargets(targets,config={}){
- return filterReviewTargets(targets,config).map(t=>({target_id:t.target_id,start:t.start,end:t.end,surface:t.surface,context:t.context,...(t.adjacent_context?{adjacent_context:t.adjacent_context}:{}),...(t.morphology?{morphology:t.morphology}:{}),...(t.pos_conflict?{pos_conflict:true}:{}),...(t.proper_noun===true?{proper_noun:true}:{}),...(t.dictionary_person_name===true?{dictionary_person_name:true}:{}),...(Array.isArray(t.verified_person_hanja)&&t.verified_person_hanja.length?{verified_person_hanja:t.verified_person_hanja}:{}),...(t.dictionary_name_homograph===true?{dictionary_name_homograph:true}:{}),...(t.suspected_person_name===true?{suspected_person_name:true}:{}),...(t.experimental_hanja_audit===true?{experimental_hanja_audit:true}:{}),...(t.experimental_loanword_audit===true?{experimental_loanword_audit:true}:{}),...(config.smartSegmentation===true?{repair_context:t.repair_context,repair_sentence_key:t.repair_sentence_key,original_target_id:t.original_target_id,...(t.scan_only?{scan_only:true}:{})}:{}),options:t.options.map(o=>({choice_id:o.choice_id,type:o.type,replacement:o.replacement,entry_id:o.entry_id,definitions:o.definitions,...(o.written_form?{written_form:o.written_form}:{}),...(o.part_of_speech?{part_of_speech:o.part_of_speech}:{}),...(o.subject_category?{subject_category:o.subject_category}:{}),...(o.semantic_category?{semantic_category:o.semantic_category}:{}),...(Array.isArray(o.segments)?{segments:o.segments}:{})}))}));
+ return filterReviewTargets(targets,config).map(t=>({target_id:t.target_id,start:t.start,end:t.end,surface:t.surface,context:t.context,...(t.adjacent_context?{adjacent_context:t.adjacent_context}:{}),...(t.morphology?{morphology:t.morphology}:{}),...(t.pos_conflict?{pos_conflict:true}:{}),...(t.proper_noun===true?{proper_noun:true}:{}),...(t.dictionary_person_name===true?{dictionary_person_name:true}:{}),...(Array.isArray(t.verified_person_hanja)&&t.verified_person_hanja.length?{verified_person_hanja:t.verified_person_hanja}:{}),...(t.dictionary_name_homograph===true?{dictionary_name_homograph:true}:{}),...(t.suspected_person_name===true?{suspected_person_name:true}:{}),...(t.experimental_hanja_audit===true&&config.dictionaryCorrectionOnly!==true?{experimental_hanja_audit:true}:{}),...(t.experimental_loanword_audit===true&&config.dictionaryCorrectionOnly!==true?{experimental_loanword_audit:true}:{}),...(config.smartSegmentation===true?{repair_context:t.repair_context,repair_sentence_key:t.repair_sentence_key,original_target_id:t.original_target_id,...(t.scan_only?{scan_only:true}:{})}:{}),options:t.options.map(o=>({choice_id:o.choice_id,type:o.type,replacement:o.replacement,entry_id:o.entry_id,definitions:o.definitions,...(o.written_form?{written_form:o.written_form}:{}),...(o.part_of_speech?{part_of_speech:o.part_of_speech}:{}),...(o.subject_category?{subject_category:o.subject_category}:{}),...(o.semantic_category?{semantic_category:o.semantic_category}:{}),...(Array.isArray(o.segments)?{segments:o.segments}:{})}))}));
 }
 export async function reviewTargets(config,targets,signal){
  if(!config.enableModelReview || !targets.length)return {accepted:[],unresolved:targets,errors:[]};
  let pending=targets,accepted=[],errors=[];
+ // Wrong numbered dictionary choices are corrected in a separate, smaller
+ // request before any unrelated incomplete-response retry.
+ const correctionIds=new Set();
+ const discardInvalid=config.discardInvalidReviewResults===true;
  const notify=event=>config.onDiagnostic?.({...event,message:safeDetail(event.message,config),detail:safeDetail(event.detail,config)});
  const thinking=thinkingSettings(config);
  // Manual input has its own validation and retry UI. API requests adaptively
@@ -137,42 +202,54 @@ export async function reviewTargets(config,targets,signal){
  let windowSize=targets.length,failStreak=0;
  for(let attempt=0;attempt<maxRequests && pending.length;attempt++){
   signal?.throwIfAborted();
-  const current=manual||smart?pending:pending.slice(0,windowSize);
+  const dictionaryOnly=!discardInvalid&&!manual&&config.retryInvalidDictionaryChoices!==false&&
+    pending.some(t=>correctionIds.has(t.target_id));
+  const current=dictionaryOnly?pending.filter(t=>correctionIds.has(t.target_id)):
+    manual||smart?pending:pending.slice(0,windowSize);
+  const attemptConfig=dictionaryOnly?{...config,dictionaryCorrectionOnly:true,
+    experimentalHanja:false,experimentalLoanword:false,smartSegmentation:false,
+    dictionaryFree:false}:config;
   config.onPreview?.([]);
   notify({stage:'request',level:'info',attempt:attempt+1,model:config.model,thinking:thinking.label,
-   message:`模型审核第 ${attempt+1}/${maxRequests} 次请求：本次 ${current.length} 个，尚余 ${pending.length} 个；${thinking.label}`});
+   message:`模型审核第 ${attempt+1}/${maxRequests} 次请求：本次 ${current.length} 个，尚余 ${pending.length} 个；${dictionaryOnly?'仅纠正错误词典编号；':''}${thinking.label}`});
   try {
-   const wire=modelTargets(current,config);
-   const response=await (config.request || requestChoices)({...config,attempt:attempt+1},wire,signal);
-   const experimental=config.experimentalHanja===true||config.experimentalLoanword===true;
+   const wire=modelTargets(current,attemptConfig);
+   config.onReviewTargetsSubmitted?.(wire,attempt+1);
+   const response=await (config.request || requestChoices)({...attemptConfig,attempt:attempt+1},wire,signal);
+   const experimental=attemptConfig.experimentalHanja===true||attemptConfig.experimentalLoanword===true;
+   // Manual replies are audited at entry, before invalid rows are normalized.
+   if(!manual&&attemptConfig.experimentalHanja===true)
+    config.onExperimentalHanjaAnswers?.(summarizeExperimentalHanjaAnswers(wire,response,attemptConfig));
    // In segmentation mode a successfully validated repair owns its old
    // targets. Validate repairs BEFORE requiring ordinary results; an invalid
    // repair never suppresses the original target or its dictionary choice.
-   const repair=config.smartSegmentation===true?
-     validateSegmentationRepairs(wire,response,config):{accepted:[],rejected:[]};
+   const repair=attemptConfig.smartSegmentation===true?
+     validateSegmentationRepairs(wire,response,attemptConfig):{accepted:[],rejected:[]};
    const retired=new Set(repair.accepted.flatMap(r=>r.old_target_ids));
-   const active=config.smartSegmentation===true?
+   const active=attemptConfig.smartSegmentation===true?
      current.filter(t=>!t.scan_only&&!retired.has(t.target_id)):current;
    const known=new Set(current.map(t=>t.target_id));
-   const badId=config.smartSegmentation===true&&
+   const badId=attemptConfig.smartSegmentation===true&&attemptConfig.retryInvalidDictionaryChoices===false&&attemptConfig.discardInvalidReviewResults!==true&&
      (!Array.isArray(response?.results)||response.results.some(row=>
        !row||typeof row.t!=='string'||!known.has(row.t)));
-   const choiceResponse=config.smartSegmentation===true&&!badId?
-     {...response,results:response.results.filter(row=>!retired.has(row.t)&&
-       !current.some(t=>t.scan_only&&t.target_id===row.t))}:response;
+   const choiceResponse=attemptConfig.smartSegmentation===true&&!badId&&Array.isArray(response?.results)?
+     {...response,results:response.results.filter(row=>!retired.has(row?.t)&&
+       !current.some(t=>t.scan_only&&t.target_id===row?.t))}:response;
    const result=badId?
      {accepted:[],unresolved:active,experimentalAccepted:0,experimentalRejected:0}:
-     experimental?validateExperimentalChoices(active,choiceResponse,config):validateChoices(active,choiceResponse,config);
+     experimental?validateExperimentalChoices(active,choiceResponse,attemptConfig):validateChoices(active,choiceResponse,attemptConfig);
    accepted.push(...result.accepted);
    const incomplete=new Set(result.unresolved.map(t=>t.target_id));
    const submitted=new Set(current.map(t=>t.target_id));
    pending=pending.filter(t=>!submitted.has(t.target_id)||incomplete.has(t.target_id));
+   for(const id of submitted)if(!incomplete.has(id))correctionIds.delete(id);
+   for(const id of result.invalidDictionaryChoiceIds||[])correctionIds.add(id);
    await config.onAccepted?.(result.accepted);
    if(result.accepted.length||repair.accepted.length)failStreak=0;
    else failStreak++;
    if(!manual&&!smart&&incomplete.size)
     windowSize=Math.max(1,Math.ceil(current.length/2));
-   if(config.smartSegmentation===true){
+   if(attemptConfig.smartSegmentation===true){
     await config.onRepairs?.(repair.accepted);
     config.onRepairRejected?.(repair.rejected.length);
     const corrected=repair.accepted.filter(r=>r.offset_corrected===true).length;
@@ -184,7 +261,15 @@ export async function reviewTargets(config,targets,signal){
    }
    config.onPreview?.([]);
    if(experimental)notify({stage:'experimental',level:result.experimentalRejected?'warning':'info',message:`单次回复：直接词源标注 ${result.experimentalAccepted} 项、拒绝无效直接词源 ${result.experimentalRejected} 项。`,detail:result.experimentalRejected?JSON.stringify({reasons:result.rejectionCounts,samples:result.rejectionSamples}):''});
-   notify({stage:'response',level:pending.length?'warning':'info',message:`模型返回：采纳 ${result.accepted.length} 项，未解决 ${pending.length} 项`,detail:pending.length?JSON.stringify(response):''});
+   if(!discardInvalid&&result.invalidDictionaryChoiceIds?.length)notify({stage:'retry-dictionary-choice',level:'warning',attempt:attempt+1,
+    message:`发现 ${result.invalidDictionaryChoiceIds.length} 个不存在的词典选项编号，已保存有效答案；仅对这些目标生成下一次纠错请求。`,
+    detail:result.invalidDictionaryChoiceIds.slice(0,20).join(', ')});
+   const implicitCount=result.accepted.filter(a=>a.implicitNull).length;
+   const discardedCount=result.accepted.filter(a=>a.discardedInvalid).length;
+   notify({stage:'response',level:pending.length?'warning':'info',message:discardInvalid?
+    `模型返回：本次处理 ${result.accepted.length} 项（遗漏或空 c 按 null：${implicitCount}；非法结果按 null：${discardedCount}）；未解决 ${pending.length} 项，不因答案问题重试。`:
+    `模型返回：采纳 ${result.accepted.length} 项，未解决 ${pending.length} 项`,detail:pending.length?JSON.stringify(response):''});
+   if(discardInvalid)break;
   }catch(error){
    // A stream can be interrupted after many COMPLETE, individually valid
    // t/c objects. Keep those decisions and retry only the missing targets.
@@ -222,7 +307,7 @@ export async function reviewTargets(config,targets,signal){
   }
  }
  if(pending.length)notify({stage:'incomplete',level:'warning',
-  message:`仍有 ${pending.length} 个审核目标未完成。已保留所有有效答案，不能将本轮视为完整成功。`});
+  message:discardInvalid?`有 ${pending.length} 个目标未获得有效结果；已保留正确答案，不会因答案无效而再次请求。`:`仍有 ${pending.length} 个审核目标未完成。已保留所有有效答案，不能将本轮视为完整成功。`});
  return {accepted,unresolved:pending,errors};
 }
 async function requestChoices(config,targets,signal){
@@ -287,12 +372,15 @@ async function requestChoices(config,targets,signal){
   const previewCallback=accepted=>{latestPreview=accepted;config.onPreview?.(accepted);};
   const preview=(config.experimentalHanja||config.experimentalLoanword)?
     experimentalChoicePreviewParser(targets,config,previewCallback):
-    choicePreviewParser(targets,previewCallback);
+    choicePreviewParser(targets,previewCallback,()=>null,config);
   const content=await readModelContent(response,{protocol:responses?'responses':provider==='anthropic'?'anthropic':'chat',signal:requestSignal,maxContentChars:Math.min(16_000_000,Math.max(2_000_000,outputTokenLimit*8)),onRaw,onMetadata,onDelta:preview,onStarted:()=>config.onDiagnostic?.({stage:'response',level:'info',message:'已收到模型流式响应，正在接收审核结果。'})});
-  let result;try{if(typeof content!=='string'||!content.trim())throw Error('empty');result=JSON.parse(content.trim().replace(/^```(?:json)?\s*/i,'').replace(/\s*```$/,''));}
-  catch{const error=Error('模型最终回复为空、非 JSON 或不符合候选 ID 协议');error.detail=content||raw;throw error;}
+  let result,recovered=false;
+  try{({response:result,recovered}=parsePartialReviewJson(content));}
+  catch{if(config.discardInvalidReviewResults===true){result={results:[]};config.onDiagnostic?.({stage:'discard-invalid',level:'warning',message:'模型回复无法解析，已丢弃本次无效答案，不重新请求。'});}
+    else{const error=Error('模型最终回复为空、非 JSON 或不符合候选 ID 协议');error.detail=content||raw;throw error;}}
+  if(recovered)config.onDiagnostic?.({stage:'partial-json',level:'warning',message:config.discardInvalidReviewResults===true?`模型 JSON 存在语法错误，已安全提取 ${result.results.length} 条有效对象，其他错误对象直接丢弃。`:`模型 JSON 存在语法错误，已安全提取 ${result.results.length} 条独立完整的 t/c 答案；其他目标将单独补交。`});
   const checked=(config.experimentalHanja||config.experimentalLoanword)?validateExperimentalChoices(targets,result,config):validateChoices(targets,result,config);
-  await logger.finish(logId,{status,responseHeaders,finishedAt:new Date().toISOString(),elapsedMs:Date.now()-started,firstByteMs,validation:{accepted:checked.accepted.length,unresolved:checked.unresolved.length},response:{raw,truncated:rawTruncated,parsed:result,...metadata}},secrets);
+  await logger.finish(logId,{status,responseHeaders,finishedAt:new Date().toISOString(),elapsedMs:Date.now()-started,firstByteMs,validation:{accepted:checked.accepted.length,unresolved:checked.unresolved.length,recovered},response:{raw,truncated:rawTruncated,parsed:result,...metadata}},secrets);
   return result;
  }catch(error){
   // Only completed and validated stream rows can be salvaged. Request-level

@@ -30,7 +30,7 @@ export function createSrtManualChannel(settings){
     status:(signal,progress)=>engineStatus(signal,progress,{allowNoDictionary}),
     analyze:(text,modes,signal,progress)=>analyzeLocal(text,{...modes,allowNoDictionary},signal,progress),
     analyzeBatch:(texts,modes,signal,progress)=>analyzeLocalBatch(texts,{...modes,allowNoDictionary},signal,progress),
-    modelConfig:async()=>({provider:'manual',model:'manual-chat',endpoint:'manual://chat',manualReview:true,request:session.request,batchContextTier:settings.batchContextTier,manualOutputTokenLimit:settings.manualOutputTokenLimit,apiOutputTokenLimit:settings.apiOutputTokenLimit,matchManualOutputBudget:settings.matchManualOutputBudget,reviewPosFilter:settings.reviewPosFilter,experimentalHanja:settings.experimentalHanja,experimentalLoanword:settings.experimentalLoanword,hanjaReadingCheck:settings.hanjaReadingCheck,smartSegmentation:settings.smartSegmentation})
+    modelConfig:async()=>({provider:'manual',model:'manual-chat',endpoint:'manual://chat',manualReview:true,request:session.request,batchContextTier:settings.batchContextTier,manualOutputTokenLimit:settings.manualOutputTokenLimit,apiOutputTokenLimit:settings.apiOutputTokenLimit,matchManualOutputBudget:settings.matchManualOutputBudget,reviewPosFilter:settings.reviewPosFilter,retryInvalidDictionaryChoices:settings.retryInvalidDictionaryChoices,discardInvalidReviewResults:settings.discardInvalidReviewResults,experimentalHanja:settings.experimentalHanja,experimentalLoanword:settings.experimentalLoanword,hanjaReadingCheck:settings.hanjaReadingCheck,smartSegmentation:settings.smartSegmentation})
    }).catch(error=>{if(!controller.signal.aborted)post({type:'ERROR',operationId,error:error.message});});
   }
  };

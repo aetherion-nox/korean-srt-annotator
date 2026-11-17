@@ -91,17 +91,23 @@ export function validateAnalysis(text,data){
   const nameOnlyReview=(t.suspected_person_name===true||t.dictionary_name_homograph===true)&&validOptions.some(o=>o.type==='nonconversion');
    // Dictionary-free inputs have KEEP only; the model can propose allowed
    // Hanja/Latin origins which are independently validated before application.
-   if(!convertible&&!nameOnlyReview&&!dictionaryFree&&t.experimental_loanword_audit!==true){rejectedTargets++;continue;}
+   if(!convertible&&!nameOnlyReview&&!dictionaryFree&&t.experimental_loanword_audit!==true&&t.experimental_hanja_audit!==true){rejectedTargets++;continue;}
   // Browser engine transmits the source text once per analyzed paragraph.
   // Restore the original Target.context contract for all existing model,
   // manual, and experimental checks, while preserving strict text agreement.
   targets.push({...t,context:text,options:validOptions});ranges.push([t.start,t.end]);
  }
  ranges.sort((a,b)=>a[0]-b[0]);if(ranges.some((r,i)=>i&&r[0]<ranges[i-1][1]))throw Error('Overlapping engine spans');
- return {...data,annotations,targets,diagnostics,stats:{...data.stats,local_determined:Math.max(0,Number(data.stats.local_determined||0)-rejectedAnnotations),pending:Math.max(0,Number(data.stats.pending||0)-rejectedTargets),structural_rejections:Number(data.stats.structural_rejections||0)+rejectedAnnotations+rejectedTargets,rejected_options:Number(data.stats.rejected_options||0)+rejectedOptions}};
+ // Count both sides of the validator's target-filter boundary. These counters
+ // reflect actual engine output, even when analysis results come from cache.
+ const hanjaGenerated=data.targets.filter(t=>t.experimental_hanja_audit===true).length;
+ const hanjaRetained=targets.filter(t=>t.experimental_hanja_audit===true).length;
+ const loanwordGenerated=data.targets.filter(t=>t.experimental_loanword_audit===true).length;
+ const loanwordRetained=targets.filter(t=>t.experimental_loanword_audit===true).length;
+ return {...data,annotations,targets,diagnostics,stats:{...data.stats,experimental_hanja_audit_generated:hanjaGenerated,experimental_hanja_audit_retained:hanjaRetained,experimental_hanja_audit_filtered:hanjaGenerated-hanjaRetained,experimental_loanword_audit_generated:loanwordGenerated,experimental_loanword_audit_retained:loanwordRetained,local_determined:Math.max(0,Number(data.stats.local_determined||0)-rejectedAnnotations),pending:Math.max(0,Number(data.stats.pending||0)-rejectedTargets),structural_rejections:Number(data.stats.structural_rejections||0)+rejectedAnnotations+rejectedTargets,rejected_options:Number(data.stats.rejected_options||0)+rejectedOptions}};
 }
 export async function engineConfig(){
- const saved=await chrome.storage.local.get(['enableModelReview','reviewAllCandidates','manualModelReview','experimentalHanja','experimentalLoanword','hanjaReadingCheck','smartSegmentation','reviewLocalConversions','batchContextTier','manualOutputTokenLimit','apiOutputTokenLimit','matchManualOutputBudget','nameProtection','filterDictionaryPeople','reviewPosFilter']);
+ const saved=await chrome.storage.local.get(['enableModelReview','reviewAllCandidates','manualModelReview','experimentalHanja','experimentalLoanword','hanjaReadingCheck','smartSegmentation','reviewLocalConversions','retryInvalidDictionaryChoices','discardInvalidReviewResults','batchContextTier','manualOutputTokenLimit','apiOutputTokenLimit','matchManualOutputBudget','nameProtection','filterDictionaryPeople','reviewPosFilter']);
  const switches=engineSwitchValues(saved);
  return {...switches,
   enableModelReview:switches.enableModelReview||switches.reviewAllCandidates||switches.manualModelReview||switches.experimentalHanja||switches.experimentalLoanword||switches.smartSegmentation,

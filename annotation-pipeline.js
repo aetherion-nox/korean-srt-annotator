@@ -21,7 +21,8 @@ export async function runSentencePipeline(message,post,{signal,analyze=analyzeLo
  if(typeof message.operationId!=='string'||!message.operationId||!Array.isArray(sentences)||!sentences.length||sentences.length>20000||sentences.some(s=>typeof s.id!=='string'||!s.id||typeof s.text!=='string'||!s.text||s.text.length>20000)||new Set(sentences.map(s=>s.id)).size!==sentences.length)throw Error('Invalid sentence operation');
  const modes={hanja:!!message.modes?.hanja,loanword:!!message.modes?.loanword,nameProtection:message.nameProtection!==false,filterDictionaryPeople:message.filterDictionaryPeople!==false,experimentalLoanwordAudit:message.experimentalLoanwordAudit===true&&enabled&&!!message.modes?.loanword,experimentalHanjaAudit:message.experimentalHanjaAudit===true&&enabled&&!!message.modes?.hanja};if(!modes.hanja&&!modes.loanword)throw Error('Enable an annotation mode');
  const outcomeSamples={nonconversion:[],invalidChoiceFallback:[],zeroProjection:[]};
- const stats={model_accepted:0,model_keep:0,model_nonconversion:0,model_invalid_choice_fallback:0,model_conversion_choices:0,model_projected_fragments:0,model_zero_projection:0,session_hanja_glossary_terms:0,session_hanja_glossary_variants:0,session_hanja_glossary_conflicts:0,session_hanja_new_targets:0,session_hanja_new_choices:0,session_hanja_enhanced_choices:0,session_hanja_skipped:0,inline_hanja_pairs_found:0,inline_hanja_local_converted:0,inline_hanja_reused:0,inline_hanja_removed_targets:0,inline_hanja_pairs_skipped:0,model_literal_origins:0,repair_applied:0,repair_rejected:0,repair_offset_corrected:0,local_determined:0,pending:0,model_resolved:0,unresolved:0,model_unanswered:0,structural_rejections:0,rejected_options:0,skipped_mixed:0,protected_names:0,cacheHits:0,upstream_converted:0,upstream_ambiguous:0,upstream_no_match:0,upstream_kept:0};
+ const hanjaRejectionReasons={},hanjaRejectionSamples=[],hanjaSentIds=new Set();
+ const stats={model_accepted:0,model_keep:0,model_nonconversion:0,model_invalid_choice_fallback:0,model_conversion_choices:0,model_projected_fragments:0,model_zero_projection:0,session_hanja_glossary_terms:0,session_hanja_glossary_variants:0,session_hanja_glossary_conflicts:0,session_hanja_new_targets:0,session_hanja_new_choices:0,session_hanja_enhanced_choices:0,session_hanja_skipped:0,inline_hanja_pairs_found:0,inline_hanja_local_converted:0,inline_hanja_reused:0,inline_hanja_removed_targets:0,inline_hanja_pairs_skipped:0,model_literal_origins:0,experimental_hanja_audit_generated:0,experimental_hanja_audit_retained:0,experimental_hanja_audit_filtered:0,experimental_loanword_audit_generated:0,experimental_loanword_audit_retained:0,experimental_hanja_audit_reviewable:0,experimental_hanja_audit_sent:0,experimental_hanja_audit_request_occurrences:0,model_direct_hanja_proposed:0,model_direct_hanja_accepted:0,model_direct_hanja_rejected:0,model_direct_hanja_reading_rejected:0,model_direct_hanja_boundary_rejected:0,model_direct_hanja_name_rejected:0,model_direct_hanja_conflict_rejected:0,repair_applied:0,repair_rejected:0,repair_offset_corrected:0,local_determined:0,pending:0,model_resolved:0,unresolved:0,model_unanswered:0,structural_rejections:0,rejected_options:0,skipped_mixed:0,protected_names:0,cacheHits:0,upstream_converted:0,upstream_ambiguous:0,upstream_no_match:0,upstream_kept:0};
  const totalSentences=sentences.length;let completedSentences=0;let identity;
  const sendResult=createOrderedResultRelay(post);
  const emit=(type,extra={})=>{signal?.throwIfAborted();return sendResult({type,operationId:message.operationId,...(smartSegmentation?{smartSegmentation:true}:{}),engine_version:identity?.engine_version,dictionary_fingerprint:identity?.dictionary_fingerprint,dictionary_metadata:identity?.dictionary_metadata,...extra,stats:{...stats},completedSentences,totalSentences,percent:Math.round(completedSentences/totalSentences*100)});};
@@ -49,7 +50,7 @@ export async function runSentencePipeline(message,post,{signal,analyze=analyzeLo
  const phaseTotals={};const slowestParagraphs=[];
  const localModes=reviewAll?{...modes,reviewAll:true,smartSegmentation}:
    reviewLocalConversions?{...modes,reviewLocalConversions:true,smartSegmentation}:{...modes,smartSegmentation};
- const cacheKeyFor=text=>JSON.stringify([...(smartSegmentation?['dictionary-v6-smart-segmentation-person-filter',true]:['dictionary-v5-strict-person-filter']),
+ const cacheKeyFor=text=>JSON.stringify([...(smartSegmentation?['dictionary-v7-hanja-audit-survival-smart',true]:['dictionary-v7-hanja-audit-survival']),
    reviewAll,identity.engine_version,identity.dictionary_fingerprint,modes,text,...(reviewLocalConversions?['review-local-conversions-v1']:[])]);
  function profile(analysis){
   for(const [stage,value] of Object.entries(analysis.stats?.timings_ms||{}))
@@ -133,6 +134,11 @@ export async function runSentencePipeline(message,post,{signal,analyze=analyzeLo
    }
    analysis.stats={...analysis.stats,pending:analysis.targets.length};
   }
+  // Count actual engine output and validator survivors, including cache hits.
+  for(const key of ['experimental_hanja_audit_generated','experimental_hanja_audit_retained',
+    'experimental_hanja_audit_filtered','experimental_loanword_audit_generated',
+    'experimental_loanword_audit_retained'])
+    stats[key]+=Number(analysis.stats?.[key]||0);
   // Pre-fetching 12 paragraphs used to be charged entirely to the first
   // paragraph. Prefer measured engine time and exclude batch transport from
   // per-paragraph wall-clock timing. Cache hits are never reported as cold work.
@@ -220,6 +226,7 @@ export async function runSentencePipeline(message,post,{signal,analyze=analyzeLo
   }
   if(smartSegmentation)analysis={...analysis,targets:analysis.targets.map(t=>({...t,repair_sentence_key:sentence.id,
    repair_context:analysis.repair_context||{kiwi_tokens:[],protected_ranges:[]}}))};
+  stats.experimental_hanja_audit_reviewable+=analysis.targets.filter(t=>t.experimental_hanja_audit===true).length;
   work.push({sentence,analysis,localKey,repairs:[],sessionHanjaUsed});
  }
  diagnostic({stage:'performance',level:'info',
@@ -239,6 +246,9 @@ export async function runSentencePipeline(message,post,{signal,analyze=analyzeLo
  if(stats.inline_hanja_pairs_found)diagnostic({stage:'page-hanja',level:'info',
    message:`正文汉字开头括注：识别 ${stats.inline_hanja_pairs_found} 对，直接本地标注 ${stats.inline_hanja_local_converted} 对，已有一致标注 ${stats.inline_hanja_reused} 对，移除待审核 Target ${stats.inline_hanja_removed_targets} 个，跳过有歧义位置 ${stats.inline_hanja_pairs_skipped} 对；不送模型。`});
   if(stats.protected_names)diagnostic({stage:'rules',level:'info',message:`已按完整名称范围保留 ${stats.protected_names} 处疑似姓名，未使用内部普通词义替换。`,detail:JSON.stringify({protected_names:stats.protected_names})});
+ if(modes.experimentalHanjaAudit)
+  diagnostic({stage:'experimental-hanja-audit',level:stats.experimental_hanja_audit_filtered?'warning':'info',
+   message:`汉字词实验审核目标：本地生成 ${stats.experimental_hanja_audit_generated}、本地校验保留 ${stats.experimental_hanja_audit_retained}、本地过滤 ${stats.experimental_hanja_audit_filtered}、后续流程可审核 ${stats.experimental_hanja_audit_reviewable}；外来语实验目标生成 ${stats.experimental_loanword_audit_generated}、保留 ${stats.experimental_loanword_audit_retained}。`});
  if(hasOriginalCounts)diagnostic({stage:'rules',level:'info',message:`原作者规则：自动转换 ${stats.upstream_converted}，歧义 ${stats.upstream_ambiguous}，未匹配 ${stats.upstream_no_match}；本地标注 ${stats.local_determined}，待审核 ${stats.pending}。`,detail:JSON.stringify({upstream_converted:stats.upstream_converted,upstream_ambiguous:stats.upstream_ambiguous,upstream_no_match:stats.upstream_no_match,upstream_kept:stats.upstream_kept,local_determined:stats.local_determined,pending:stats.pending,structural_rejections:stats.structural_rejections,rejected_options:stats.rejected_options,skipped_mixed:stats.skipped_mixed})});
  let config;
  if(enabled && work.some(w=>w.analysis.targets.length)){
@@ -280,7 +290,7 @@ export async function runSentencePipeline(message,post,{signal,analyze=analyzeLo
    analysis.targets;
   item.result={accepted:[],unresolved:item.reviewableTargets};
   if(config && item.reviewableTargets.length){
-   const fingerprint=JSON.stringify([config.hanjaReadingCheck!==false,smartSegmentation?'id-review-v21-single-pass-segmentation-repair':experimental?'id-review-v20-literal-origin-choice':'id-review-v17-chunk-context',config.endpoint,config.model,config.provider,config.reviewPosFilter!==false,!!config.disableThinking,config.reasoningEffort,...(experimental?[!!config.experimentalHanja,!!config.experimentalLoanword]:[])]);
+   const fingerprint=JSON.stringify([config.hanjaReadingCheck!==false,smartSegmentation?'id-review-v21-single-pass-segmentation-repair':experimental?'id-review-v20-literal-origin-choice':'id-review-v17-chunk-context',config.endpoint,config.model,config.provider,config.reviewPosFilter!==false,config.retryInvalidDictionaryChoices!==false,config.discardInvalidReviewResults===true,!!config.disableThinking,config.reasoningEffort,...(experimental?[!!config.experimentalHanja,!!config.experimentalLoanword]:[])]);
    item.reviewFingerprint=fingerprint;
    item.reviewKey=JSON.stringify([localKey,fingerprint,compactReviewTargets(analysis.targets),context]);
    const cached=!item.sessionHanjaUsed&&!experimental&&!smartSegmentation&&!bypassCache&&!config.manualReview&&cache.get(item.reviewKey);
@@ -363,6 +373,27 @@ export async function runSentencePipeline(message,post,{signal,analyze=analyzeLo
      publishModel(item,previews,previews.length>0);
     }
    }}:{}),
+   onReviewTargetsSubmitted:wire=>{
+    for(const t of wire)if(t.experimental_hanja_audit===true){
+     stats.experimental_hanja_audit_request_occurrences++;
+     const key=batchIndex+':'+t.target_id;
+     if(!hanjaSentIds.has(key)){hanjaSentIds.add(key);stats.experimental_hanja_audit_sent++;}
+    }
+   },
+   onExperimentalHanjaAnswers:audit=>{
+    stats.model_direct_hanja_proposed+=audit.proposed;
+    stats.model_direct_hanja_accepted+=audit.accepted;
+    stats.model_direct_hanja_rejected+=audit.rejected;
+    stats.model_direct_hanja_reading_rejected+=audit.reasons.hanja_reading_conflict||0;
+    stats.model_direct_hanja_name_rejected+=audit.reasons.person_name_hanja_blocked||0;
+    stats.model_direct_hanja_conflict_rejected+=audit.reasons.conflicting_well_formed_answers||0;
+    stats.model_direct_hanja_boundary_rejected+=(audit.reasons.hanja_alignment_or_boundary||0)+
+      (audit.reasons.partial_or_cross_word_boundary||0);
+    for(const [reason,count] of Object.entries(audit.reasons))
+     hanjaRejectionReasons[reason]=(hanjaRejectionReasons[reason]||0)+count;
+    for(const sample of audit.samples||[])if(hanjaRejectionSamples.length<12)
+     hanjaRejectionSamples.push({batch:batchIndex+1,...sample});
+   },
    onAccepted:accepted=>{
     for(const a of accepted){
      const owner=owners.get(a.target.target_id);
@@ -387,7 +418,7 @@ export async function runSentencePipeline(message,post,{signal,analyze=analyzeLo
     // Non-progressive mode still checkpoints completed model batches in the
     // page and MV3 session journal, but does NOT paint until DONE (or an
     // unexpected disconnect). Streaming mode also keeps its incremental UI.
-    if(!smartSegmentation&&!config.manualReview)
+    if(!config.manualReview&&(!smartSegmentation||config.retryInvalidDictionaryChoices!==false||config.discardInvalidReviewResults===true))
      return Promise.all(batch.items.map(item=>publishModel(item)));
    },
    ...(smartSegmentation?{onRepairRejected:count=>{stats.repair_rejected+=count;},onRepairOffsetCorrected:count=>{stats.repair_offset_corrected+=count;},onRepairs:repairs=>{
@@ -451,6 +482,10 @@ export async function runSentencePipeline(message,post,{signal,analyze=analyzeLo
   const retired=new Set((item.repairs||[]).flatMap(r=>r.source_target_ids));
   return n+item.result.unresolved.filter(t=>!t.scan_only&&!retired.has(t.target_id)).length;
  },0):0;
+ if(modes.experimentalHanjaAudit||stats.model_direct_hanja_proposed)
+  diagnostic({stage:'experimental-hanja-audit',level:stats.model_direct_hanja_rejected?'warning':'info',
+   message:`汉字词实验补全：生成目标 ${stats.experimental_hanja_audit_generated}、通过本地校验 ${stats.experimental_hanja_audit_retained}、进入模型请求 ${stats.experimental_hanja_audit_sent}（含重试提交 ${stats.experimental_hanja_audit_request_occurrences} 次）；模型直接填写汉字 ${stats.model_direct_hanja_proposed}、校验通过 ${stats.model_direct_hanja_accepted}、拒绝 ${stats.model_direct_hanja_rejected}（读音 ${stats.model_direct_hanja_reading_rejected}、词界或对齐 ${stats.model_direct_hanja_boundary_rejected}、姓名保护 ${stats.model_direct_hanja_name_rejected}、冲突答案 ${stats.model_direct_hanja_conflict_rejected}）。`,
+   detail:JSON.stringify({reasonCounts:hanjaRejectionReasons,samples:hanjaRejectionSamples})});
  diagnostic({stage:'model-outcomes',
   level:stats.model_invalid_choice_fallback||stats.model_nonconversion>Math.max(100,stats.model_conversion_choices*2)?'warning':'info',
   message:`模型审核归因：接受 ${stats.model_accepted} 个答案；转换候选 ${stats.model_conversion_choices}、非转换词典义项 ${stats.model_nonconversion}、保留原文 ${stats.model_keep}（其中无效选项降级 ${stats.model_invalid_choice_fallback}）；生成 ${stats.model_projected_fragments} 个对齐片段，转换但无可标注片段 ${stats.model_zero_projection}。`,

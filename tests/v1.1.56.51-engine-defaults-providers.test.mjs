@@ -19,7 +19,7 @@ test('fresh engine defaults match the photographed switches; 1M is a separate de
   enableModelReview:true,preloadEngineOnStartup:true,nameProtection:true,
   filterDictionaryPeople:true,reviewPosFilter:true,experimentalHanja:true,
   hanjaReadingCheck:true,experimentalLoanword:true,smartSegmentation:true,
-  reviewLocalConversions:true,reviewAllCandidates:false,manualModelReview:true
+  reviewLocalConversions:true,retryInvalidDictionaryChoices:true,discardInvalidReviewResults:false,reviewAllCandidates:false,manualModelReview:true
  });
  assert.equal(normalizeBatchContextTier(undefined),'1m');
  assert.equal(normalizeBatchContextTier('invalid'),'1m');
@@ -42,7 +42,7 @@ test('explicit review-disabled profiles keep their legacy choice before reset',(
  assert.equal(engineSwitchValues({enableModelReview:false,experimentalHanja:true}).experimentalHanja,true);
 });
 
-test('reset button changes only the 12 switches and leaves batch size, keys, logs, dictionary, profiles untouched',async()=>{
+test('reset button changes only the 14 switches and leaves batch size, keys, logs, dictionary, profiles untouched',async()=>{
  const panel=html.match(/<section class="profile-panel engine-switch-panel"[\s\S]*?<\/section>/)?.[0];
  assert.ok(panel,'the 12 switches belong to one scoped panel');
  const ids=[...panel.matchAll(/<input id="([^"]+)" type="checkbox"/g)].map(x=>x[1]).sort();

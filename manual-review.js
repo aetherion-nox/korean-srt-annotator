@@ -3,9 +3,11 @@ export {buildManualPrompt} from './review-payload.js';
 import {validateChoices,validateExperimentalChoices} from './choice-review.js';
 import {filterReviewTarget} from './review-pos.js';
 import {explainLiteralOriginRejection} from './experimental-options.js';
+import {summarizeExperimentalHanjaAnswers} from './experimental-hanja-diagnostics.js';
 import {describeBatchBudget} from './batch-budget.js';
 import {validateSegmentationRepairs} from './segmentation-repairs.js';
 import {normalizeManualAnswer} from './manual-answer-format.js';
+import {parsePartialReviewJson} from './partial-review-json.js';
 
 // Split occurrences, including a long sentence, while retaining the actual owners.
 // Keep an oversized single dictionary entry intact rather than losing senses.
@@ -28,7 +30,8 @@ function parseAnswer(text){
  if(text.length>16*1024*1024)throw Error('结果超过 16 MiB，请仅粘贴本批的 JSON 结果。');
  let source=text.trim();
  const fence=/^```(?:json)?\s*\n?([\s\S]*?)\n?```$/i.exec(source);if(fence)source=fence[1].trim();
- let response;try{response=JSON.parse(source);}catch{throw Error('JSON 格式无效。请复制完整结果或完整的 ```json 代码块，不要包含解释文字。');}
+ let response;try{response=parsePartialReviewJson(source).response;}
+ catch{throw Error('JSON 格式无效，且没有可安全提取的独立 t/c 对象。请粘贴完整结果。');}
  // The active request, not the model's wrapper, determines the batch identity.
  return response;
 }
@@ -51,7 +54,7 @@ export function prepareManualRequest(config,targets){
    dictionary_person_name:t.dictionary_person_name===true,dictionary_name_homograph:t.dictionary_name_homograph===true
   })),scopes:[...scopes]};
  })():undefined;
- return {requestId,bindings,repairValidation,smartSegmentation:config.smartSegmentation===true,hanjaReadingCheck:config.hanjaReadingCheck===true,batchNumber:config.batchNumber,batchTotal:config.batchTotal,targetCount:wireTargets.filter(t=>!(config.smartSegmentation===true&&t.scan_only===true)).length,text:buildManualPrompt(config.context,wireTargets,requestId,config),budget:{...describeBatchBudget(config.context,wireTargets,{tier:config.batchContextTier,manual:true,wireIds:true,batchId:requestId,reviewPosFilter:config.reviewPosFilter,experimentalHanja:config.experimentalHanja,experimentalLoanword:config.experimentalLoanword,dictionaryFree:config.dictionaryFree,smartSegmentation:config.smartSegmentation,manualOutputTokenLimit:config.manualOutputTokenLimit,apiOutputTokenLimit:config.apiOutputTokenLimit}),limitReason:config.batchBudget?.limitReason}};
+ return {requestId,bindings,repairValidation,retryInvalidDictionaryChoices:config.retryInvalidDictionaryChoices!==false&&config.discardInvalidReviewResults!==true,discardInvalidReviewResults:config.discardInvalidReviewResults===true,smartSegmentation:config.smartSegmentation===true,hanjaReadingCheck:config.hanjaReadingCheck===true,batchNumber:config.batchNumber,batchTotal:config.batchTotal,targetCount:wireTargets.filter(t=>!(config.smartSegmentation===true&&t.scan_only===true)).length,text:buildManualPrompt(config.context,wireTargets,requestId,config),budget:{...describeBatchBudget(config.context,wireTargets,{tier:config.batchContextTier,manual:true,wireIds:true,batchId:requestId,reviewPosFilter:config.reviewPosFilter,experimentalHanja:config.experimentalHanja,experimentalLoanword:config.experimentalLoanword,dictionaryFree:config.dictionaryFree,smartSegmentation:config.smartSegmentation,manualOutputTokenLimit:config.manualOutputTokenLimit,apiOutputTokenLimit:config.apiOutputTokenLimit}),limitReason:config.batchBudget?.limitReason}};
 }
 
 // Preserve the original shared pools and restrict retry work to unsolved IDs.
@@ -59,7 +62,8 @@ function manualRetryPrompt(original,batchId,remaining,reasons,acceptedCount){
  const ids=new Set(remaining.map(t=>t.target_id));
  const lead='此前已验证并保存 '+acceptedCount+' 条答案。本次只回答以下 '+remaining.length+
    ' 个目标（用 t 字段指定）；不要重发已完成目标。逐条核对原句、候选释义与词性；不能确定时 c 为 JSON null。'+
-   ' 保留请求中的 target_id 作为 t 的值；复制 batch_id '+batchId+'；只输出 JSON 对象（batch_id、results，必要时 repairs），'+
+   ' 此次仅重新选择词典中已经列出的 c/n 选项或 JSON null；不要生成实验性自填词源，不要提交分词 repairs。'+
+   ' 保留请求中的 target_id 作为 t 的值；复制 batch_id '+batchId+'；只输出 JSON 对象（batch_id、results），'+
    '不要复制 format、sentences、candidates 或 targets。\n错误原因：\n'+
    remaining.map(t=>t.target_id+'：'+(reasons.get(t.target_id)||'该目标未返回有效答案')).join('\n')+'\n\n';
  const begin=original.indexOf('{"format":"shared-pools-v4"');
@@ -70,11 +74,17 @@ function manualRetryPrompt(original,batchId,remaining,reasons,acceptedCount){
    if(selected.length!==remaining.length)return lead+original;
    const candidateIds=new Set(selected.flatMap(t=>Object.values(t.options||{})).filter(x=>typeof x==='string'));
    const sentenceIds=new Set(selected.map(t=>t.sentence_id));
-   const payload={...old,
-     sentences:(old.sentences||[]).filter(s=>sentenceIds.has(s.sentence_id)),
+   // Correction is dictionary-only even if the original round had smart
+   // segmentation or experimental origin generation enabled.
+   const {origin_mode,allowed_origin_types,null_is_fallback_only,
+     dictionary_options_are_not_exhaustive,...dictionaryPayload}=old;
+   const payload={...dictionaryPayload,
+     sentences:(old.sentences||[]).filter(s=>sentenceIds.has(s.sentence_id)).map(({kiwi_tokens,protected_ranges,...sentence})=>sentence),
      candidates:(old.candidates||[]).filter(c=>candidateIds.has(c.candidate_id)),
-     targets:selected,batch_id:batchId};
-   return lead+original.slice(0,begin)+JSON.stringify(payload);
+     targets:selected.map(({experimental_hanja_audit,experimental_loanword_audit,
+       scan_only,repair_sentence_key,repair_context,...target})=>target),
+     batch_id:batchId};
+   return lead+JSON.stringify(payload);
  }catch{return lead+original;}
 }
 
@@ -92,7 +102,8 @@ export function createManualReviewSession({operationId,post,signal}={}){
     const abort=()=>{clear();reject(activeSignal.reason||new DOMException('Operation aborted','AbortError'));};
     pending={requestId,targets,wireTargets,originalPrompt:prepared.text,acceptedRows:new Map(),savedRepairs:[],
       experimentalHanja:config.experimentalHanja===true,experimentalLoanword:config.experimentalLoanword===true,hanjaReadingCheck:config.hanjaReadingCheck===true,
-      reviewPosFilter:config.reviewPosFilter,smartSegmentation:config.smartSegmentation===true,
+      onExperimentalHanjaAnswers:config.onExperimentalHanjaAnswers,
+      reviewPosFilter:config.reviewPosFilter,retryInvalidDictionaryChoices:config.retryInvalidDictionaryChoices!==false&&config.discardInvalidReviewResults!==true,discardInvalidReviewResults:config.discardInvalidReviewResults===true,smartSegmentation:config.smartSegmentation===true,
       repairContext:config.context,repairModes:config.repairModes,
       repairScopes:new Map(targets.map((target,i)=>[wireTargets[i].target_id,config.repairScopes?.get(target.target_id)])),
       resolve:response=>{clear();resolve(response);}};
@@ -107,21 +118,55 @@ export function createManualReviewSession({operationId,post,signal}={}){
    }
    const current=pending;
    try{
-    const response=normalizeManualAnswer(parseAnswer(message.text),{
-      requestId:current.requestId,knownTargetIds:new Set(current.wireTargets.map(t=>t.target_id))
+    let parsed;
+    try{parsed=parseAnswer(message.text);}
+    catch(error){
+      if(!current.discardInvalidReviewResults||!String(message.text||'').trim())throw error;
+      const statedBatch=/"batch_id"\s*:\s*"([^"\\]*)"/.exec(message.text);
+      if(statedBatch&&statedBatch[1]!==current.requestId)throw error;
+      parsed={batch_id:current.requestId,results:[]};
+    }
+    const currentIds=new Set(current.wireTargets.map(t=>t.target_id));
+    if(current.discardInvalidReviewResults){
+      // A supplied mismatched batch ID is still a hard stop: never bind
+      // another batch's data, even when discarding malformed answers.
+      if(parsed&&!Array.isArray(parsed)&&typeof parsed==='object'&&
+         Object.hasOwn(parsed,'batch_id')&&parsed.batch_id!==current.requestId)
+        throw Error('batch_id 与当前批次不一致。');
+      const normalized=Array.isArray(parsed)?{results:parsed}:parsed;
+      parsed=normalized&&typeof normalized==='object'&&Array.isArray(normalized.results)?
+        {...normalized,results:normalized.results.filter(row=>currentIds.has(row?.t))}:
+        {results:[]};
+      if(!Object.hasOwn(parsed,'batch_id'))parsed.batch_id=current.requestId;
+    }
+    const response=normalizeManualAnswer(parsed,{
+      requestId:current.requestId,knownTargetIds:currentIds,
+      discardInvalidReviewResults:current.discardInvalidReviewResults
     });
-    if(Object.prototype.hasOwnProperty.call(response,'experimental_options'))
-      throw Error('新版协议只需要 results；请不要包含 experimental_options。');
+    if(Object.prototype.hasOwnProperty.call(response,'experimental_options')){
+      if(current.discardInvalidReviewResults)delete response.experimental_options;
+      else throw Error('新版协议只需要 results；请不要包含 experimental_options。');
+    }
     const experimental=current.experimentalHanja||current.experimentalLoanword;
-    const choicesConfig={reviewPosFilter:current.reviewPosFilter,
+    const choicesConfig={reviewPosFilter:current.reviewPosFilter,retryInvalidDictionaryChoices:current.retryInvalidDictionaryChoices,discardInvalidReviewResults:current.discardInvalidReviewResults,
       experimentalHanja:current.experimentalHanja,experimentalLoanword:current.experimentalLoanword,hanjaReadingCheck:current.hanjaReadingCheck};
+    // Capture what the model actually wrote, before invalid words are discarded.
+    if(current.experimentalHanja)
+      current.onExperimentalHanjaAnswers?.(summarizeExperimentalHanjaAnswers(current.wireTargets,response,choicesConfig));
     const known=new Map(current.wireTargets.map(t=>[t.target_id,t]));
-    const incoming=new Map(),reasons=new Map(),unknown=[];
+    const incoming=new Map(),reasons=new Map(),unknown=[],discardedIds=new Set();
+    const presented=new Set(response.results.filter(row=>known.has(row?.t)).map(row=>row.t));
+    // Count only structurally valid t/c rows. One valid answer is usable
+    // regardless of how many malformed siblings mention the same t.
+    const implicitNullIds=new Set(),blankIds=new Set();
     for(const row of response.results){
-      if(!row||typeof row!=='object'||Array.isArray(row)||
-         Object.keys(row).sort().join(',')!=='c,t'||
-         typeof row.t!=='string'||!known.has(row.t)||
-         !(row.c===null||(typeof row.c==='string'&&row.c.length>0))){
+      const structural=row&&typeof row==='object'&&!Array.isArray(row)&&known.has(row.t);
+      if(structural&&Object.keys(row).every(key=>key==='t'||key==='c')&&
+         (!Object.hasOwn(row,'c')||typeof row.c==='string'&&!row.c.trim()))
+        blankIds.add(row.t);
+      if(!structural||Object.keys(row).sort().join(',')!=='c,t'||
+         typeof row.t!=='string'||
+         !(row.c===null||(typeof row.c==='string'&&row.c.trim().length>0))){
         unknown.push(String(row?.t??'(无效)'));continue;
       }
       if(!incoming.has(row.t))incoming.set(row.t,[]);
@@ -168,8 +213,10 @@ export function createManualReviewSession({operationId,post,signal}={}){
     const retired=new Set(validRepairs.flatMap(r=>r.old_target_ids));
     for(const [id,rows] of incoming){
       if(current.acceptedRows.has(id)||retired.has(id))continue; // Old answers never override a verified repair.
-      if(rows.length!==1){
-        reasons.set(id,'重复 target_id（本次 '+rows.length+' 条），请只返回一条');continue;
+      // Exact repeated t/c values are one answer. Different c values
+      // (including null versus the string "null") are ambiguous.
+      if(rows.some(row=>row.c!==rows[0].c)){
+        reasons.set(id,'重复 target_id（本次 '+rows.length+' 条格式合法但不同答案），本目标答案全部作废');continue;
       }
       const target=known.get(id),row=rows[0];
       if(current.smartSegmentation&&target.scan_only===true)continue; // Review-only placeholders need no answer.
@@ -182,16 +229,33 @@ export function createManualReviewSession({operationId,post,signal}={}){
           '；原因 '+explainLiteralOriginRejection(target,row.c,choicesConfig));continue;
       }
       const selectedOption=selected.accepted[0].option;
+      if(current.discardInvalidReviewResults&&selected.accepted[0].discardedInvalid)discardedIds.add(id);
       current.acceptedRows.set(id,{t:id,c:selectedOption.type==='keep'?null:selectedOption.choice_id});
     }
     const required=current.wireTargets.filter(t=>!(current.smartSegmentation&&t.scan_only===true));
+    // A dictionary-free experimental target has no c/n option to correct.
+    // Do not re-ask those targets as part of this targeted correction feature.
+    if(current.retryInvalidDictionaryChoices)for(const target of required){
+      if(current.acceptedRows.has(target.target_id)||retired.has(target.target_id))continue;
+      if(!filterReviewTarget(target,choicesConfig).options.some(o=>o.type!=='keep'))
+        current.acceptedRows.set(target.target_id,{t:target.target_id,c:null});
+    }
+    // In discard mode, omitted or unusable entries map to c:null; among
+    // repeated entries only the structurally valid rows are counted.
+    if(current.discardInvalidReviewResults)for(const target of required){
+      if(current.acceptedRows.has(target.target_id)||retired.has(target.target_id))continue;
+      current.acceptedRows.set(target.target_id,{t:target.target_id,c:null});
+      if(!presented.has(target.target_id)||blankIds.has(target.target_id)&&!incoming.has(target.target_id))
+        implicitNullIds.add(target.target_id);
+      else discardedIds.add(target.target_id);
+    }
     const missing=required.filter(t=>!current.acceptedRows.has(t.target_id)&&!retired.has(t.target_id));
     const completedCount=required.filter(t=>current.acceptedRows.has(t.target_id)||retired.has(t.target_id)).length;
-    if(missing.length){
+    if(missing.length&&!current.discardInvalidReviewResults){
       const retry=manualRetryPrompt(current.originalPrompt,current.requestId,missing,reasons,completedCount);
       const detail=missing.slice(0,12).map(t=>t.target_id+'（'+(reasons.get(t.target_id)||'未提交')+'）').join('；');
       notify('MANUAL_REVIEW_ERROR',{requestId:current.requestId,
-        error:'本批已保留 '+completedCount+'/'+required.length+
+        error:'本批已记录可安全应用的 '+completedCount+'/'+required.length+
           ' 条有效答案，剩余 '+missing.length+' 条待补交：'+detail+
           (missing.length>12?'；其余见补交提示词':'')+
           (unknown.length?'。已忽略 '+unknown.length+' 条未知或跨批 target_id':'')+
@@ -212,7 +276,8 @@ export function createManualReviewSession({operationId,post,signal}={}){
       t:ids.get(row.t),c:row.c
     })),...proposed};
     notify('MANUAL_REVIEW_ACCEPTED',{requestId:current.requestId,
-      targetCount:required.length,
+      targetCount:required.length,discardedCount:current.discardInvalidReviewResults?discardedIds.size:0,
+      implicitNullCount:current.discardInvalidReviewResults?implicitNullIds.size:0,
       acceptedRows:[...current.acceptedRows.values()].filter(row=>!retired.has(row.t)),
       acceptedRepairs:current.savedRepairs,retiredTargetIds:[...retired]});
     current.resolve(mapped);return true;

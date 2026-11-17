@@ -14,11 +14,18 @@ export const REVIEW_INSTRUCTIONS=[
  'Verify Hanja readings against the actual Hangul syllables; do not select an otherwise valid dictionary word only because its spelling looks plausible. Repeated occurrences of the same identifiable person, title or place in one article should inform interpretation, not force speculative Hanja.',
  'Names require exact identity evidence; proper_noun, dictionary_name_homograph and Kiwi morphology are hints, not proof. For a personal name, choose a matching dictionary c key only when its meaning matches the context. Otherwise return JSON null; never infer unlisted personal-name spellings. Other proper nouns likewise require a matching dictionary sense.',
  'Session-local candidates whose entry_id starts with session-inline-hanja: come from an explicit Hangul(漢字) parenthesis already ENCOUNTERED earlier in the CURRENT article, or earlier in this very paragraph. Their definitions quote the source context, not an external dictionary. Treat them as strong article evidence but NOT proof that every identical-looking word or person name has the same meaning. Compete with existing dictionary choices and choose only when the current occurrence supports that sense; otherwise select the ordinary alternative or JSON null.',
- 'An empty options object {} supplies NO local c/n keys; never invent a numbered option. Without any established supported origin, answer actual JSON null. Any invalid or unavailable choice is treated as null by local validation without changing target identity.',
+ 'An empty options object {} supplies NO local c/n keys; never invent a numbered option. Without any established supported origin, answer actual JSON null. Only use actual local option keys. Invalid numbered c/n keys will be corrected in a follow-up request, while independently valid choices are retained; never guess a choice not provided.',
  'Do not invent or repeat t identifiers, and do not change source start/end positions. Preserve every source word boundary and native suffix.'
 ].join('\n');
 
 export function buildReviewInstructions(config={}){
+ if(config.dictionaryCorrectionOnly===true)return [
+  'DICTIONARY-ONLY CORRECTION: Previously accepted results have already been saved and applied. Do not repeat them.',
+  'Each supplied target has a unique target_id, sentence_id and options mapping local c/n keys to pooled candidate p keys. The p keys are NOT valid answers.',
+  'Use the exact source sentence, context and dictionary candidate definitions to choose ONLY one existing local c/n option for each supplied target, or actual JSON null if none matches. Do not invent a numbered key.',
+  'Do not propose experimental Hanja or Latin spellings, and do not propose segmentation repairs. Only t/c answer objects are allowed.',
+  'Return one JSON object, e.g. {"results":[{"t":"t0","c":"c0"},{"t":"t1","c":null}]}; use actual IDs/choices from this request. Do not add explanations, repairs, or unrelated targets.'
+ ].join('\n');
  const experimental=config.experimentalHanja===true||config.experimentalLoanword===true;
  const generated=experimental?buildExperimentalOriginInstructions(config):'';
  const noDictionary=experimental&&config.dictionaryFree===true?[

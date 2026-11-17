@@ -1,6 +1,6 @@
 // Manual answers have one canonical format, but the wrapper is not part of
 // the annotation. Keep identity checks separate from per-row origin checks.
-export function normalizeManualAnswer(value,{requestId,knownTargetIds}={}){
+export function normalizeManualAnswer(value,{requestId,knownTargetIds,discardInvalidReviewResults=false}={}){
  const response=Array.isArray(value)?{results:value}:value;
  if(!response||typeof response!=='object'||Array.isArray(response)||
     !Array.isArray(response.results))
@@ -11,7 +11,7 @@ export function normalizeManualAnswer(value,{requestId,knownTargetIds}={}){
  // an unusable conversion response, NOT an unknown target. Converting it to
  // JSON null can only preserve the Korean source and cannot fabricate Hanja.
  // Do not guess what an arbitrary extra property means.
- const results=response.results.map(row=>{
+ const results=discardInvalidReviewResults?response.results:response.results.map(row=>{
   if(!row||typeof row!=='object'||Array.isArray(row)||
      typeof row.t!=='string'||!/^n\d+$/u.test(Object.keys(row).find(k=>k!=='t')||'')||
      Object.keys(row).length!==2||Object.hasOwn(row,'c'))return row;
