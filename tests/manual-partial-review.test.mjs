@@ -62,7 +62,7 @@ test('scan-only segmentation probes are excluded from all manual answer totals',
   options:[{choice_id:'KEEP',type:'keep',replacement:surface,entry_id:null,definitions:[]}]
  });
  const targets=[make('a',0,'가'),make('b',1,'나'),make('probe1',3,'다',true),make('probe2',4,'라',true)];
- const result=session.request({context,smartSegmentation:true,reviewPosFilter:true},targets);
+ const result=session.request({context,smartSegmentation:true,reviewPosFilter:true,retryInvalidDictionaryChoices:false},targets);
  const req=events.find(e=>e.type==='MANUAL_REVIEW_REQUEST');
  assert.equal(req.targetCount,2,'two scan-only targets do not need results');
  const wire=JSON.parse(req.text.slice(req.text.indexOf('{"format":"shared-pools-v4"')));

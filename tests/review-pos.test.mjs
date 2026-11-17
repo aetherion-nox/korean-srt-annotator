@@ -36,7 +36,7 @@ test('manual and API export use identical allowed keys and validation rejects re
  const wire=modelTargets([t]);assert.deepEqual(wire[0].options.map(o=>o.choice_id),['KEEP','c0','n0']);
  const manual=JSON.parse(buildManualPrompt('가',[t],'batch').split('\n').at(-1));
  assert.deepEqual(manual.targets[0].options,packed(t).targets[0].options);
- assert.equal(validateChoices([t],{results:[{t:'t0',c:'c1'}]}).accepted[0].option.type,'keep');
+ assert.equal(validateChoices([t],{results:[{t:'t0',c:'c1'}]},{retryInvalidDictionaryChoices:false}).accepted[0].option.type,'keep');
  assert.equal(validateChoices([t],{results:[{t:'t0',c:null}]}).accepted.length,1);
  assert.equal(validateChoices([t],{results:[{t:'t0',c:'n0'}]}).accepted.length,1);
  assert.equal(modelTargets([target('MAG',[option('c0','명사')])])[0].pos_conflict,true);
@@ -93,7 +93,7 @@ test('NNB keeps only explicit dependent POS and unknown senses across API and ma
  assert.deepEqual(modelTargets([t])[0].options.map(o=>o.choice_id),['KEEP',...expected]);
  const manual=JSON.parse(buildManualPrompt(context,[t],'batch').split('\n').at(-1));
  assert.deepEqual(Object.keys(manual.targets[0].options),expected);assert.equal(manual.sentences[0].text,context);
- assert.equal(validateChoices([t],{results:[{t:'t0',c:'c3'}]}).accepted[0].option.type,'keep');
+ assert.equal(validateChoices([t],{results:[{t:'t0',c:'c3'}]},{retryInvalidDictionaryChoices:false}).accepted[0].option.type,'keep');
  assert.deepEqual(modelTargets([t],{reviewPosFilter:false})[0].options.map(o=>o.choice_id),t.options.map(o=>o.choice_id));
  assert.equal(validateChoices([t],{results:[{t:'t0',c:'c3'}]},{reviewPosFilter:false}).accepted.length,1);
  const conflicted=packed(target('NNB',[option('c0','명사'),option('n0','名詞','nonconversion')]));

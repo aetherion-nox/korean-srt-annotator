@@ -73,7 +73,7 @@ test('smart segmentation and dictionary-free origin instructions are independent
 
 test('prompt refactor never changes c/n/null and experimental validation rules',()=>{
  for(const [value,expected] of [['c0','hanja'],['n0','nonconversion'],[null,'keep'],['c999','keep']]){
-  const plain=validateChoices([t],{results:[{t:'t0',c:value}]});
+  const plain=validateChoices([t],{results:[{t:'t0',c:value}]},{retryInvalidDictionaryChoices:false});
   assert.equal(plain.accepted[0].option.type,expected);
  }
  const ordinary=validateChoices([t],{results:[{t:'t0',c:'韓國'}]});

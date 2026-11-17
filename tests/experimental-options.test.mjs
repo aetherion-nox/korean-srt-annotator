@@ -12,7 +12,7 @@ const loan={target_id:'t1',start:0,end:2,surface:'게임',context:'게임을 한
  {choice_id:'KEEP',type:'keep',replacement:'게임',entry_id:null,definitions:[]},
  {choice_id:'n0',type:'nonconversion',replacement:'게임',entry_id:12,definitions:['native meaning']}]};
 const reply=(target_id,choice_id)=>({results:[{t:target_id,c:choice_id==='KEEP'?null:choice_id}]});
-const choose=(target,choice_id,config)=>validateExperimentalChoices([target],reply(target.target_id,choice_id),config);
+const choose=(target,choice_id,config)=>validateExperimentalChoices([target],reply(target.target_id,choice_id),{retryInvalidDictionaryChoices:false,...config});
 
 test('literal Hanja is read from results.choice_id; no proposal array or x0 required',()=>{
  const result=choose(hanja,'原潛',{experimentalHanja:true});

@@ -14,15 +14,15 @@ const target={
   {choice_id:'c0',type:'loanword',replacement:'balm',entry_id:3,definitions:['skin care product']}
  ]};
 const response=(id,c)=>({results:[{t:id,c}]});
-const choose=(source,c,config={})=>validateChoices([source],response(source.target_id,c),config);
-const experimental=(source,c,config)=>validateExperimentalChoices([source],response(source.target_id,c),config);
+const choose=(source,c,config={})=>validateChoices([source],response(source.target_id,c),{retryInvalidDictionaryChoices:false,...config});
+const experimental=(source,c,config)=>validateExperimentalChoices([source],response(source.target_id,c),{retryInvalidDictionaryChoices:false,...config});
 
 test('v1.1.56.22 n/c option pools and native sense definitions are unchanged',()=>{
  const {payload}=buildReviewPayload(target.context,[target],{reviewPosFilter:false});
  assert.deepEqual(Object.keys(payload.targets[0].options),['n0','n1','c0']);
  assert.equal(payload.candidates.length,3);
  assert.match(buildReviewInstructions(),/Nonconversion dictionary senses use their n key/);
- assert.match(buildReviewInstructions(),/Any invalid or unavailable choice is treated as null/);
+ assert.match(buildReviewInstructions(),/Invalid numbered c\/n keys will be corrected/);
 });
 
 test('valid n/c keys keep the exact original dictionary sense; unknown numeric keys mean null',()=>{
@@ -71,7 +71,7 @@ test('manual review automatically saves invalid numeric c/n answers as JSON null
  const second={...target,target_id:'word2',surface:'호',context:'호',start:0,end:1,
   options:[{choice_id:'KEEP',type:'keep',replacement:'호',entry_id:null,definitions:[]},
    {choice_id:'c0',type:'hanja',replacement:'號',entry_id:4,definitions:['number']}]};
- const promise=session.request({context:'밤 호',reviewPosFilter:false},[target,second]);
+ const promise=session.request({context:'밤 호',reviewPosFilter:false,retryInvalidDictionaryChoices:false},[target,second]);
  const request=events.find(e=>e.type==='MANUAL_REVIEW_REQUEST');
  const raw={batch_id:request.requestId,results:[{t:'t0',c:'n999'},{t:'t1',c:'c999'}]};
  assert.equal(session.submit({operationId:'manual-numeric',requestId:request.requestId,text:JSON.stringify(raw)}),true);
