@@ -1,4 +1,4 @@
-import {buildManualPrompt} from './review-payload.js';
+import {buildManualPrompt,buildReviewInstructions} from './review-payload.js';
 export {buildManualPrompt} from './review-payload.js';
 import {validateChoices,validateExperimentalChoices} from './choice-review.js';
 import {filterReviewTarget} from './review-pos.js';
@@ -61,8 +61,8 @@ export function prepareManualRequest(config,targets){
 function manualRetryPrompt(original,batchId,remaining,reasons,acceptedCount){
  const ids=new Set(remaining.map(t=>t.target_id));
  const lead='此前已验证并保存 '+acceptedCount+' 条答案。本次只回答以下 '+remaining.length+
-   ' 个目标（用 t 字段指定）；不要重发已完成目标。逐条核对原句、候选释义与词性；不能确定时 c 为 JSON null。'+
-   ' 此次仅重新选择词典中已经列出的 c/n 选项或 JSON null；不要生成实验性自填词源，不要提交分词 repairs。'+
+   ' 个目标（用 t 字段指定）；不要重发已完成目标。逐条核对原句、候选释义与词性及词源写法；只选符合当前语境的词典义项，即使只有一个候选也不能勉强选择；候选全部不匹配时，若允许开放词源且确有可靠原写法则可直接填写，否则 c 使用 JSON null。'+
+   ' 如果已有候选不匹配，应遵守原请求已开启的实验性词源权限；未开启的类型不可自填，无法可靠确认则使用 JSON null。此次不提交分词 repairs。'+
    ' 保留请求中的 target_id 作为 t 的值；复制 batch_id '+batchId+'；只输出 JSON 对象（batch_id、results），'+
    '不要复制 format、sentences、candidates 或 targets。\n错误原因：\n'+
    remaining.map(t=>t.target_id+'：'+(reasons.get(t.target_id)||'该目标未返回有效答案')).join('\n')+'\n\n';
@@ -74,17 +74,19 @@ function manualRetryPrompt(original,batchId,remaining,reasons,acceptedCount){
    if(selected.length!==remaining.length)return lead+original;
    const candidateIds=new Set(selected.flatMap(t=>Object.values(t.options||{})).filter(x=>typeof x==='string'));
    const sentenceIds=new Set(selected.map(t=>t.sentence_id));
-   // Correction is dictionary-only even if the original round had smart
-   // segmentation or experimental origin generation enabled.
-   const {origin_mode,allowed_origin_types,null_is_fallback_only,
-     dictionary_options_are_not_exhaustive,...dictionaryPayload}=old;
-   const payload={...dictionaryPayload,
+   // Keep origin-audit metadata and per-target permissions; omit only
+   // segmentation-only hints because this retry does not generate repairs.
+   const payload={...old,
      sentences:(old.sentences||[]).filter(s=>sentenceIds.has(s.sentence_id)).map(({kiwi_tokens,protected_ranges,...sentence})=>sentence),
      candidates:(old.candidates||[]).filter(c=>candidateIds.has(c.candidate_id)),
-     targets:selected.map(({experimental_hanja_audit,experimental_loanword_audit,
-       scan_only,repair_sentence_key,repair_context,...target})=>target),
+     targets:selected.map(({scan_only,repair_sentence_key,repair_context,...target})=>target),
      batch_id:batchId};
-   return lead+JSON.stringify(payload);
+   const originTypes=old.origin_mode==='open-origin'&&Array.isArray(old.allowed_origin_types)?old.allowed_origin_types:[];
+   const rules=buildReviewInstructions({dictionaryCorrectionOnly:true,
+     experimentalHanja:originTypes.includes('hanja'),
+     experimentalLoanword:originTypes.includes('loanword'),
+     dictionaryFree:old.null_is_fallback_only===true});
+   return lead+rules+'\n'+JSON.stringify(payload);
  }catch{return lead+original;}
 }
 

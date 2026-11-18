@@ -1,27 +1,26 @@
 import {projectAnnotation} from './local-engine.js';
 import {validateModelHanjaReadings} from './hanja-reading-check.js';
 
-// Only describe origins the user actually enabled. This rule states the
-// decision priority rather than suggesting a rarely-used optional feature.
+// Only generate direct-origin rules for types explicitly enabled by the user.
+// Keep the decision order short enough for large shared-pool batches.
 export function buildExperimentalOriginInstructions(config={}){
  const hanja=config.experimentalHanja===true,loanword=config.experimentalLoanword===true;
  if(!hanja&&!loanword)return '';
  const origin=hanja&&loanword
-  ?'genuine Hanja spelling of a Sino-Korean word or original Latin-script spelling of a borrowed word'
-  :hanja?'genuine Hanja spelling of a Sino-Korean word'
-         :'original Latin-script spelling of a borrowed word';
- const caution=hanja&&loanword
-  ?'For Latin-script origins, proper nouns including foreign personal names may use an established original spelling, never a guessed romanization of a native Korean name. For Hanja, non-person proper nouns may use authentic spellings; personal-name Hanja may use ONLY a dictionary c key or a spelling in verified_person_hanja; do not generate unverified personal Hanja. Keep original source word boundaries and Hanja-to-syllable alignment.'
-  :hanja?'Non-person proper nouns may use established Hanja origins. A personal name may use ONLY a matching dictionary c key or an exact verified_person_hanja spelling supplied by the local dictionary; otherwise return null. Preserve source word boundaries and syllable alignment.'
-         :'Proper nouns, including identifiable foreign personal names, may use their established Latin-script original. Do not romanize native Korean names or guess identity. Preserve source word boundaries.';
+  ?"genuine Hanja spelling of a Sino-Korean word or original Latin-script spelling of a borrowed word"
+  :hanja?"genuine Hanja spelling of a Sino-Korean word"
+         :"original Latin-script spelling of a borrowed word";
  return [
-  'OPEN-ENDED ORIGIN AUDIT: dictionary keys are only candidate meanings, not an exhaustive inventory of authentic origins. With an enabled origin type, an authentic Hanja/Latin spelling may be placed directly into results[].c.',
-  'For EACH occurrence, FIRST infer its contextual meaning and actual etymological word boundaries; THEN compare every offered dictionary sense and origin, favoring a matching local c/n option key.',
-  'Experimental origin-audit targets may have empty options because the local dictionary has no entry. These are NOT proof of a Sino-Korean or borrowed origin: propose only a genuine, contextually verified source spelling of an enabled script, otherwise JSON null. Never force Hanja for a native word or invent personal-name characters; for a dictionary-proven person, ONLY its supplied c option or verified_person_hanja spelling is valid.',
-  'When no supplied dictionary sense matches and the authentic '+origin+' is reliably known, put that spelling directly in c, even when an offered dictionary sense has the same origin spelling. A raw origin is independent, unverified model evidence, NOT validation of that dictionary meaning; never invent a dictionary key or choose an unrelated meaning.',
-  'Use actual JSON null for native words, unverified identity, unclear boundaries, or genuinely uncertain origins. A proper-noun tag alone is not grounds to return null; follow the enabled script and personal-name rules.',
-  'Hanja must align with the Korean source; explicitly tagged native suffixes can be preserved. '+caution,
-  'Output exactly one {t,c} row per target unless superseded by a validated segmentation repair; t matches target_id, c is an option key, genuine enabled source spelling, or JSON null.'
+  "OPEN-ENDED ORIGIN AUDIT: dictionary keys are candidate meanings, not an exhaustive inventory of authentic origins. A genuine enabled source spelling may be placed directly in c.",
+  "For EACH occurrence, FIRST infer its contextual meaning and word boundaries; THEN compare every offered dictionary sense and spelling. Use a c/n key ONLY if both its meaning and origin match, not because it is the only, closest or most convenient candidate.",
+  "DECISION ORDER: choose a genuinely matching local key; if none matches but an authentic origin of an enabled type is reliably known, write it directly in c rather than select a wrong key; otherwise use actual JSON null.",
+  "Experimental origin-audit targets may have empty options: no dictionary entry does not prove foreign or Sino-Korean origin. Propose only reliable source spellings; never invent a dictionary key.",
+  "When no supplied dictionary sense matches and the authentic "+origin+" is reliably known, put that spelling directly in c. This is independent, unverified model evidence, NOT proof that an unrelated dictionary meaning is correct.",
+  "Use actual JSON null for native words, uncertain origins, unverified identities or unclear word boundaries. A proper-noun tag alone is not grounds to return null.",
+  hanja?"EXPERIMENTAL HANJA ON: direct Hanja must be genuine Sino-Korean characters aligned to Hangul readings, NOT a meaning-equivalent Chinese translation pronounced differently. Do not replace native Korean morphemes with semantic Hanja; preserve source boundaries and explicit native suffixes. Hanja must align with the Korean source.":"EXPERIMENTAL HANJA OFF: no raw Hanja in results[].c; use only a matching dictionary c/n key or actual JSON null for Hanja words.",
+  loanword?"EXPERIMENTAL LOANWORD ON: borrowed words may use established Latin originals, including identifiable foreign personal names. Do not invent translations or romanizations of native Korean names.":"EXPERIMENTAL LOANWORD OFF: no raw Latin origin in results[].c; use only a matching dictionary c/n key or actual JSON null for borrowed words.",
+  ...(hanja?["Non-person proper nouns may use authentic Hanja spellings. A personal name may use ONLY a matching dictionary c key or verified_person_hanja; never guess personal Hanja."]:[]),
+  "Output exactly one {t,c} row per target unless superseded by a validated segmentation repair. c is a matching local key, an authentic enabled source spelling or JSON null. Results and repair objects follow separate rules."
  ].join('\n');
 }
 

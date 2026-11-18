@@ -16,8 +16,8 @@ const target=(id,surface,options=[])=>({
 test('new switch defaults on and new Chrome content script can load recovery parser',()=>{
  assert.equal(ENGINE_SWITCH_DEFAULTS.retryInvalidDictionaryChoices,true);
  const manifest=JSON.parse(readFileSync(new URL('../manifest.json',import.meta.url),'utf8'));
- assert.equal(manifest.version,'1.0.40');
- // SRT runs inside its extension workbench; no web-exposed content script is required.
+ assert.equal(manifest.version,'1.0.41');
+ // SRT runs inside its workbench; the parser is an internal module.
  assert.match(readFileSync(new URL('../choice-review.js',import.meta.url),'utf8'),/partial-review-json/);
  assert.match(readFileSync(new URL('../manual-review.js',import.meta.url),'utf8'),/partial-review-json/);
 });
@@ -66,7 +66,7 @@ test('experimental free-form origin rejection does not enter dictionary correcti
 
 test('API accepts valid answers, then only re-asks incorrect dictionary target',async()=>{
  const targets=[target('t0','가',[hanja('c0','可')]),
-  target('t1','나',[hanja('c1','羅')]),
+  {...target('t1','나',[hanja('c1','羅')]),experimental_hanja_audit:true},
   target('t2','다',[hanja('c2','多')])];
  const requests=[],updates=[];
  const result=await reviewTargets({
@@ -77,10 +77,10 @@ test('API accepts valid answers, then only re-asks incorrect dictionary target',
    requests.push(wire.map(t=>t.target_id));
    if(requests.length===2){
     assert.equal(config.dictionaryCorrectionOnly,true);
-    assert.equal(config.experimentalHanja,false);
-    assert.equal(config.experimentalLoanword,false);
+    assert.equal(config.experimentalHanja,true);
+    assert.equal(config.experimentalLoanword,true);
     assert.equal(config.smartSegmentation,false);
-    assert.equal(wire[0].experimental_hanja_audit,undefined);
+    assert.equal(wire[0].experimental_hanja_audit,true);
    }
    return requests.length===1?
     {results:[{t:'t0',c:'c0'},{t:'t1',c:'c99'},{t:'t2',c:'c2'}]}:
@@ -121,7 +121,7 @@ test('manual mode retains validated rows, emits only invalid dictionary target i
  const correction=JSON.parse(partial.repairPrompt.slice(partial.repairPrompt.indexOf('{"format":"shared-pools-v4"')));
  assert.deepEqual(correction.targets.map(row=>row.target_id),['t1']);
  assert.deepEqual(correction.candidates.map(row=>row.candidate_id),['p1']);
- assert.match(partial.repairPrompt,/不要生成实验性自填词源/);
+ assert.match(partial.repairPrompt,/DICTIONARY-ONLY CORRECTION/);
  assert.equal(correction.origin_mode,undefined);
  assert.equal(correction.allowed_origin_types,undefined);
  assert.equal(correction.targets[0].experimental_hanja_audit,undefined);

@@ -3,37 +3,51 @@ import {buildExperimentalOriginInstructions} from './experimental-options.js';
 import {SMART_SEGMENTATION_INSTRUCTIONS} from './smart-segmentation-prompt.js';
 
 // Compact-ID JSON protocol. No support for old result row field names.
-export const REVIEW_INSTRUCTIONS=[
- 'Annotate Korean occurrences by true origin and context-specific meaning, using the supplied dictionary senses.',
- 'Input format shared-pools-v4: sentences[] contains source sentences; targets[].sentence_id references its sentence, and each target retains a unique target_id. Each target options maps its local c/n keys to pooled candidates p keys; p keys are not valid answers.',
- 'For EACH target return exactly one JSON object with fields t and c in results[]. t must match its target_id precisely. c must be a matching local dictionary c/n key or actual JSON null to preserve the Korean original.',
- 'Field names are ALWAYS exactly t and c. An n0/n1/n2 nonconversion choice belongs in the VALUE of c (e.g. {"t":"tX","c":"n2"}), NEVER as a property name (not {"t":"tX","n2":"c0"}).',
- 'For API replies, return {"results":[{"t":"t0","c":"c0"},{"t":"t1","c":null}]}. For manual replies, also include the original batch_id in the outer object. Do not use string "null" for actual null, and never put explanatory text or other fields into a result row.',
- 'Decide meaning from the sentence and adjacent context BEFORE selecting a dictionary sense: identify the exact source word, surrounding phrase, named entities and context-specific meaning. Dictionary options are proposals, not proof: reject a c/n key whose definition denotes a different meaning even if it is the only available candidate. Nonconversion dictionary senses use their n key; use actual JSON null when no supported origin applies.',
- 'Check the entire orthographic word and its grammatical suffixes before committing any shorter fragment. If a candidate cuts through a personal name, title or indivisible word, do not convert that fragment. Preserve it with JSON null rather than inventing a partial meaning.',
- 'Verify Hanja readings against the actual Hangul syllables; do not select an otherwise valid dictionary word only because its spelling looks plausible. Repeated occurrences of the same identifiable person, title or place in one article should inform interpretation, not force speculative Hanja.',
- 'Names require exact identity evidence; proper_noun, dictionary_name_homograph and Kiwi morphology are hints, not proof. For a personal name, choose a matching dictionary c key only when its meaning matches the context. Otherwise return JSON null; never infer unlisted personal-name spellings. Other proper nouns likewise require a matching dictionary sense.',
- 'Session-local candidates whose entry_id starts with session-inline-hanja: come from an explicit Hangul(漢字) parenthesis already ENCOUNTERED earlier in the CURRENT article, or earlier in this very paragraph. Their definitions quote the source context, not an external dictionary. Treat them as strong article evidence but NOT proof that every identical-looking word or person name has the same meaning. Compete with existing dictionary choices and choose only when the current occurrence supports that sense; otherwise select the ordinary alternative or JSON null.',
- 'An empty options object {} supplies NO local c/n keys; never invent a numbered option. Without any established supported origin, answer actual JSON null. Only use actual local option keys. Invalid numbered c/n keys will be corrected in a follow-up request, while independently valid choices are retained; never guess a choice not provided.',
- 'Do not invent or repeat t identifiers, and do not change source start/end positions. Preserve every source word boundary and native suffix.'
+// Shared semantic gate: dictionary candidates must match the contextual sense;
+// an etymological origin must match BOTH meaning and Korean pronunciation.
+const CORE_REVIEW_INSTRUCTIONS=[
+ "Annotate Korean occurrences by true origin and context-specific meaning, using the supplied dictionary senses.",
+ "Input format shared-pools-v4: sentences[] contains source sentences; targets[].sentence_id references its sentence, and each target retains a unique target_id. Each target options maps its local c/n keys to pooled candidates p keys; p keys are not valid answers.",
+ "For EACH target return exactly one JSON object with fields t and c in results[]. t must match its target_id precisely. The permitted c values depend on the enabled origin-audit types below; actual JSON null always preserves the Korean original.",
+ "Field names are ALWAYS exactly t and c. An n0/n1/n2 nonconversion choice belongs in the VALUE of c (e.g. {\"t\":\"tX\",\"c\":\"n2\"}), NEVER as a property name (not {\"t\":\"tX\",\"n2\":\"c0\"}).",
+ "For API replies, return {\"results\":[{\"t\":\"t0\",\"c\":\"c0\"},{\"t\":\"t1\",\"c\":null}]}. For manual replies, also include the original batch_id in the outer object. Do not use string \"null\" for actual null, and never put explanatory text or other fields into a result row.",
+ "Decide meaning from the sentence and adjacent context BEFORE selecting a dictionary sense: identify the actual Korean lexical item, morpheme boundaries, named entity and context-specific meaning. Dictionary options are proposals, not proof. For EACH local candidate, verify BOTH its definition/sense and its actual written origin against that contextual meaning. A wrong c/n candidate is wrong even when it is the only candidate; NEVER choose the nearest available key just to complete the response. Nonconversion dictionary senses use their n key only when their meaning genuinely matches the occurrence; otherwise follow the permitted c values below.",
+ "Check the entire orthographic word and its grammatical suffixes before committing any shorter fragment. If a candidate cuts through a personal name, title or indivisible word, do not convert that fragment. Preserve it with JSON null rather than inventing a partial meaning.",
+ "Hanja annotations must represent authentic Hanja etymology aligned to Korean readings, NOT a Chinese translation or semantically similar expression pronounced differently in Korean. Never replace a native Korean morpheme with Hanja merely to express its meaning. Verify individual Hanja readings against the actual Hangul syllables and word boundaries, including valid initial-sound phenomena; matching semantics alone is insufficient.",
+ "Names require exact identity evidence; proper_noun, dictionary_name_homograph and Kiwi morphology are hints, not proof. For a personal name, choose a matching dictionary c key only when its meaning matches the context. Otherwise return JSON null; never infer unlisted personal-name spellings. Other proper nouns also require reliable contextual identity and origin evidence.",
+ "Session-local candidates whose entry_id starts with session-inline-hanja: come from an explicit Hangul(漢字) parenthesis already ENCOUNTERED earlier in the CURRENT article, or earlier in this very paragraph. Their definitions quote the source context, not an external dictionary. Treat them as strong article evidence but NOT proof that every identical-looking word or person name has the same meaning. Compete with existing dictionary choices and choose only when the current occurrence supports that sense; otherwise select the ordinary alternative or JSON null.",
+ "An empty options object {} supplies NO local c/n keys; never invent a numbered option. Invalid numbered c/n keys will be corrected in a follow-up request, while independently valid choices are retained; never guess a choice not provided.",
+ "Do not invent or repeat t identifiers, and do not change source start/end positions. Preserve every source word boundary and native suffix.",
 ].join('\n');
+const STANDARD_REVIEW_RULES=[
+ "DICTIONARY-ONLY ANSWERS: results[].c must be a matching local dictionary c/n key or actual JSON null. Directly written Hanja or Latin-script spellings are NOT allowed in results[].c. If all provided local candidates are semantically wrong or unsupported, return actual JSON null, even if you happen to know a plausible authentic spelling. Never choose an incorrect candidate merely because it is present.",
+ "An empty options object {} provides no dictionary key; use actual JSON null for that target. Do not fabricate a c/n key for an empty option set.",
+].join('\n');
+export const REVIEW_INSTRUCTIONS=[CORE_REVIEW_INSTRUCTIONS,STANDARD_REVIEW_RULES].join('\n');
 
 export function buildReviewInstructions(config={}){
- if(config.dictionaryCorrectionOnly===true)return [
-  'DICTIONARY-ONLY CORRECTION: Previously accepted results have already been saved and applied. Do not repeat them.',
-  'Each supplied target has a unique target_id, sentence_id and options mapping local c/n keys to pooled candidate p keys. The p keys are NOT valid answers.',
-  'Use the exact source sentence, context and dictionary candidate definitions to choose ONLY one existing local c/n option for each supplied target, or actual JSON null if none matches. Do not invent a numbered key.',
-  'Do not propose experimental Hanja or Latin spellings, and do not propose segmentation repairs. Only t/c answer objects are allowed.',
-  'Return one JSON object, e.g. {"results":[{"t":"t0","c":"c0"},{"t":"t1","c":null}]}; use actual IDs/choices from this request. Do not add explanations, repairs, or unrelated targets.'
- ].join('\n');
+ if(config.dictionaryCorrectionOnly===true){
+  // Targeted retries keep the original origin-audit toggles. Only segmentation
+  // repairs are excluded: the model is correcting t/c decisions, not spans.
+  const experimental=config.experimentalHanja===true||config.experimentalLoanword===true;
+  return [
+   experimental?
+    'ORIGIN-AUDIT CORRECTION: Previous valid answers are saved. Reconsider only the supplied target IDs with the same enabled experimental origin types as the original request.':
+    'DICTIONARY-ONLY CORRECTION: Previous valid answers are saved. Reconsider only the supplied target IDs.',
+   buildReviewInstructions({...config,dictionaryCorrectionOnly:false,smartSegmentation:false}),
+   'Do not repeat saved answers. Return exactly one t/c row for each supplied target, with actual JSON null if the context does not support any permitted origin. Never invent numbered c/n keys; do not submit repairs or any unrelated targets.',
+   'API response format: {"results":[{"t":"t0","c":"c0"},{"t":"t1","c":null}]}. Manual retries must also include their original batch_id.'
+  ].join('\n');
+ }
  const experimental=config.experimentalHanja===true||config.experimentalLoanword===true;
  const generated=experimental?buildExperimentalOriginInstructions(config):'';
  const noDictionary=experimental&&config.dictionaryFree===true?[
   'OPEN-ENDED ORIGIN AUDIT: no external dictionary was loaded; empty options do not prohibit an authentic generated origin.',
-  'Infer a reliably known etymological Hanja spelling or borrowed Latin original only for the enabled origin type; not an invented translation, transcription, or romanization.',
+  'Infer a reliably known etymological Hanja spelling or borrowed Latin original only for the enabled origin type; NEVER substitute a meaning translation, invented spelling, or unrelated word.',
   'For genuine Korean native vocabulary and uncertain cases use actual JSON null. Never invent a dictionary option key.'
  ].join('\n'):'';
- return [REVIEW_INSTRUCTIONS,...(generated?[generated]:[]),...(noDictionary?[noDictionary]:[]),
+ return [experimental?CORE_REVIEW_INSTRUCTIONS:REVIEW_INSTRUCTIONS,
+  ...(generated?[generated]:[]),...(noDictionary?[noDictionary]:[]),
   ...(config.smartSegmentation===true?[SMART_SEGMENTATION_INSTRUCTIONS]:[])].join('\n');
 }
 export function buildManualPrompt(context,targets,batchId,config={}){

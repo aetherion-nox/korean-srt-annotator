@@ -184,7 +184,7 @@ export function safeDetail(value,config={}){
  return text.replace(/Bearer\s+[^\s"'<>]+/gi,'Bearer [REDACTED]').replace(/sk-[A-Za-z0-9_-]+/g,'[REDACTED]').slice(0,3000);
 }
 export function modelTargets(targets,config={}){
- return filterReviewTargets(targets,config).map(t=>({target_id:t.target_id,start:t.start,end:t.end,surface:t.surface,context:t.context,...(t.adjacent_context?{adjacent_context:t.adjacent_context}:{}),...(t.morphology?{morphology:t.morphology}:{}),...(t.pos_conflict?{pos_conflict:true}:{}),...(t.proper_noun===true?{proper_noun:true}:{}),...(t.dictionary_person_name===true?{dictionary_person_name:true}:{}),...(Array.isArray(t.verified_person_hanja)&&t.verified_person_hanja.length?{verified_person_hanja:t.verified_person_hanja}:{}),...(t.dictionary_name_homograph===true?{dictionary_name_homograph:true}:{}),...(t.suspected_person_name===true?{suspected_person_name:true}:{}),...(t.experimental_hanja_audit===true&&config.dictionaryCorrectionOnly!==true?{experimental_hanja_audit:true}:{}),...(t.experimental_loanword_audit===true&&config.dictionaryCorrectionOnly!==true?{experimental_loanword_audit:true}:{}),...(config.smartSegmentation===true?{repair_context:t.repair_context,repair_sentence_key:t.repair_sentence_key,original_target_id:t.original_target_id,...(t.scan_only?{scan_only:true}:{})}:{}),options:t.options.map(o=>({choice_id:o.choice_id,type:o.type,replacement:o.replacement,entry_id:o.entry_id,definitions:o.definitions,...(o.written_form?{written_form:o.written_form}:{}),...(o.part_of_speech?{part_of_speech:o.part_of_speech}:{}),...(o.subject_category?{subject_category:o.subject_category}:{}),...(o.semantic_category?{semantic_category:o.semantic_category}:{}),...(Array.isArray(o.segments)?{segments:o.segments}:{})}))}));
+ return filterReviewTargets(targets,config).map(t=>({target_id:t.target_id,start:t.start,end:t.end,surface:t.surface,context:t.context,...(t.adjacent_context?{adjacent_context:t.adjacent_context}:{}),...(t.morphology?{morphology:t.morphology}:{}),...(t.pos_conflict?{pos_conflict:true}:{}),...(t.proper_noun===true?{proper_noun:true}:{}),...(t.dictionary_person_name===true?{dictionary_person_name:true}:{}),...(Array.isArray(t.verified_person_hanja)&&t.verified_person_hanja.length?{verified_person_hanja:t.verified_person_hanja}:{}),...(t.dictionary_name_homograph===true?{dictionary_name_homograph:true}:{}),...(t.suspected_person_name===true?{suspected_person_name:true}:{}),...(t.experimental_hanja_audit===true?{experimental_hanja_audit:true}:{}),...(t.experimental_loanword_audit===true?{experimental_loanword_audit:true}:{}),...(config.smartSegmentation===true?{repair_context:t.repair_context,repair_sentence_key:t.repair_sentence_key,original_target_id:t.original_target_id,...(t.scan_only?{scan_only:true}:{})}:{}),options:t.options.map(o=>({choice_id:o.choice_id,type:o.type,replacement:o.replacement,entry_id:o.entry_id,definitions:o.definitions,...(o.written_form?{written_form:o.written_form}:{}),...(o.part_of_speech?{part_of_speech:o.part_of_speech}:{}),...(o.subject_category?{subject_category:o.subject_category}:{}),...(o.semantic_category?{semantic_category:o.semantic_category}:{}),...(Array.isArray(o.segments)?{segments:o.segments}:{})}))}));
 }
 export async function reviewTargets(config,targets,signal){
  if(!config.enableModelReview || !targets.length)return {accepted:[],unresolved:targets,errors:[]};
@@ -206,12 +206,13 @@ export async function reviewTargets(config,targets,signal){
     pending.some(t=>correctionIds.has(t.target_id));
   const current=dictionaryOnly?pending.filter(t=>correctionIds.has(t.target_id)):
     manual||smart?pending:pending.slice(0,windowSize);
+  // A targeted retry disables segmentation repairs, not the original
+  // experimental permissions to write a verified Hanja/Latin origin.
   const attemptConfig=dictionaryOnly?{...config,dictionaryCorrectionOnly:true,
-    experimentalHanja:false,experimentalLoanword:false,smartSegmentation:false,
-    dictionaryFree:false}:config;
+    smartSegmentation:false}:config;
   config.onPreview?.([]);
   notify({stage:'request',level:'info',attempt:attempt+1,model:config.model,thinking:thinking.label,
-   message:`模型审核第 ${attempt+1}/${maxRequests} 次请求：本次 ${current.length} 个，尚余 ${pending.length} 个；${dictionaryOnly?'仅纠正错误词典编号；':''}${thinking.label}`});
+   message:`模型审核第 ${attempt+1}/${maxRequests} 次请求：本次 ${current.length} 个，尚余 ${pending.length} 个；${dictionaryOnly?'仅纠正错误词典编号（保留原实验性词源权限）；':''}${thinking.label}`});
   try {
    const wire=modelTargets(current,attemptConfig);
    config.onReviewTargetsSubmitted?.(wire,attempt+1);
