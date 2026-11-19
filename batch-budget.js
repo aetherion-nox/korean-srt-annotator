@@ -22,7 +22,8 @@ export function describeBatchBudget(context,targets,{tier=DEFAULT_BATCH_CONTEXT_
  tier=normalizeBatchContextTier(tier);
  const wire=wireIds?targets:targets.map((t,i)=>({...t,target_id:manual?'t'+i:'b0t'+i}));
  const experimental=experimentalHanja===true||experimentalLoanword===true;
- const config={reviewPosFilter,experimentalHanja,experimentalLoanword,dictionaryFree,smartSegmentation};
+ const config={reviewPosFilter,experimentalHanja,experimentalLoanword,dictionaryFree,smartSegmentation,
+  referenceSubtitle:wire.some(t=>!!t.reference_context)};
  const input=manual?buildManualPrompt(context,wire,batchId,config):buildReviewInstructions(config)+'\n'+JSON.stringify(buildReviewPayload(context||'',wire,config).payload);
  // Estimate the compact {t,c} response, with a true JSON null for unchanged text.
  const reply=JSON.stringify({...(manual?{batch_id:batchId}:{}),results:wire.filter(t=>!(smartSegmentation===true&&t.scan_only===true)).map(t=>{

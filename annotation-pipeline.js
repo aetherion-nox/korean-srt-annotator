@@ -226,6 +226,14 @@ export async function runSentencePipeline(message,post,{signal,analyze=analyzeLo
   }
   if(smartSegmentation)analysis={...analysis,targets:analysis.targets.map(t=>({...t,repair_sentence_key:sentence.id,
    repair_context:analysis.repair_context||{kiwi_tokens:[],protected_ranges:[]}}))};
+  // Optional translated subtitles are model-only evidence. Never alter local
+  // tokenizer input, Korean source/offsets, candidates, or learned glossary.
+  if(sentence.referenceContext!==undefined){
+   if(typeof sentence.referenceContext!=='string'||sentence.referenceContext.length>1400)
+    throw Error('Invalid auxiliary subtitle review context');
+   if(sentence.referenceContext)
+    analysis={...analysis,targets:analysis.targets.map(t=>({...t,reference_context:sentence.referenceContext}))};
+  }
   stats.experimental_hanja_audit_reviewable+=analysis.targets.filter(t=>t.experimental_hanja_audit===true).length;
   work.push({sentence,analysis,localKey,repairs:[],sessionHanjaUsed});
  }

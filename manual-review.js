@@ -85,7 +85,8 @@ function manualRetryPrompt(original,batchId,remaining,reasons,acceptedCount){
    const rules=buildReviewInstructions({dictionaryCorrectionOnly:true,
      experimentalHanja:originTypes.includes('hanja'),
      experimentalLoanword:originTypes.includes('loanword'),
-     dictionaryFree:old.null_is_fallback_only===true});
+     dictionaryFree:old.null_is_fallback_only===true,
+     referenceSubtitle:(old.sentences||[]).some(s=>!!s.reference_context)});
    return lead+rules+'\n'+JSON.stringify(payload);
  }catch{return lead+original;}
 }

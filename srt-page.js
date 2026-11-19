@@ -2,14 +2,16 @@ import {parseSrt,renderSrt,decodeSrt,mergeSrtResults,fingerprintSrt} from './srt
 import {engineConfig} from './local-engine.js';
 import {createSrtManualChannel} from './srt-manual-channel.js';
 import {completeManualAnswer} from './srt-manual-response.js';
+import {parseAuxiliarySrt,buildAuxiliaryContexts} from './srt-reference-context.js';
 const $=id=>document.getElementById(id);
 let documentState=null,fileName='',results=new Map(),running=false,activePort=null,abortBatch=null,manualRequest=null,operationId='',hasRun=false,loading=false;
+let referenceState=null,referenceLoading=false,referenceGeneration=0;
 let stats={},currentStats={},previewTimer,loadGeneration=0,runGeneration=0;
 let inputFingerprint='',lastSubmittedAnswer=null;
 const fields={local_determined:'localCount',pending:'pendingCount',model_resolved:'modelCount',unresolved:'unresolvedCount'};
 const report=message=>{$('status').textContent=message;};
 const log=message=>{const lines=$('logs').textContent.split('\n').filter(Boolean);lines.push(`${new Date().toLocaleTimeString()} ${message}`);$('logs').textContent=lines.slice(-200).join('\n');};
-function setBusy(value){running=value;for(const id of ['subtitleFile','encoding','filterUntimedLines','hanja','loanword'])$(id).disabled=value;$('start').disabled=value||!documentState||loading;$('cancel').disabled=!value;$('download').disabled=value||!documentState||!hasRun;}
+function setBusy(value){running=value;for(const id of ['subtitleFile','encoding','filterUntimedLines','hanja','loanword','referenceFile','referenceEncoding','referenceOffsetSeconds','clearReference'])$(id).disabled=value||referenceLoading&&id.startsWith('reference');$('start').disabled=value||!documentState||loading||referenceLoading;$('cancel').disabled=!value;$('download').disabled=value||!documentState||!hasRun;}
 function updateStats(){for(const [key,id] of Object.entries(fields))$(id).textContent=(stats[key]||0)+(currentStats[key]||0);}
 function previewSource(text){const limit=Number($('previewLimit').value);if(!limit)return text;const parsed=parseSrt(text);if(parsed.cues.length<=limit)return text;const blocks=text.split(/(?:\r\n|\n|\r)[ \t]*(?:\r\n|\n|\r)/u);return blocks.slice(0,limit).join('\n\n')+'\n\n…（完整字幕见下载文件）';}
 function refreshPreview(){clearTimeout(previewTimer);previewTimer=null;if(!documentState)return;$('original').textContent=previewSource(documentState.source);$('output').textContent=previewSource(renderSrt(documentState,results));}
@@ -33,12 +35,42 @@ async function loadFile(){
  }catch(error){if(generation!==loadGeneration)return;$('fileInfo').textContent=error.message;report('导入失败，请检查 SRT 格式或编码。');}
  finally{if(generation===loadGeneration){loading=false;setBusy(false);}}
 }
+function resetForReferenceChange(){
+ if(!hasRun)return;
+ hasRun=false;results=new Map();stats={};currentStats={};updateStats();$('progress').value=0;
+ try{refreshPreview();}catch(error){log(error.message);}
+ report('辅助字幕或时间偏移已改变。请重新开始标注，原韩语字幕保持不变。');
+}
+async function loadReferenceFile(){
+ if(running)return;
+ const file=$('referenceFile').files?.[0],generation=++referenceGeneration;
+ referenceState=null;resetForReferenceChange();
+ if(!file){$('referenceInfo').textContent='未使用辅助字幕（可选，不影响正常韩语标注）。';setBusy(false);return;}
+ referenceLoading=true;$('referenceInfo').textContent='正在读取辅助字幕…';setBusy(false);
+ try{
+  if(file.size>20*1024*1024)throw Error('辅助字幕超过 20 MiB，请先拆分文件。');
+  const bytes=await file.arrayBuffer();if(generation!==referenceGeneration)return;
+  const encoding=$('referenceEncoding').value;
+  const decoded=decodeSrt(bytes,encoding);
+  const cues=parseAuxiliarySrt(decoded.text);
+  if(generation!==referenceGeneration)return;
+  referenceState={name:file.name,cues,encoding:decoded.encoding};
+  $('referenceInfo').textContent=`${file.name} · ${cues.length} 条 · ${decoded.encoding} · 仅作模型语义参考，不会修改、翻译或导出辅助字幕。`;
+ }catch(error){
+  if(generation!==referenceGeneration)return;
+  referenceState=null;$('referenceInfo').textContent='辅助字幕导入失败：'+error.message+'。韩语字幕仍可单独标注。';
+ }finally{if(generation===referenceGeneration){referenceLoading=false;setBusy(false);}}
+}
+$('referenceFile').addEventListener('change',loadReferenceFile);
+$('referenceEncoding').addEventListener('change',loadReferenceFile);
+$('referenceOffsetSeconds').addEventListener('change',()=>{if(!running){resetForReferenceChange();if(referenceState)$('referenceInfo').textContent=`${referenceState.name} · ${referenceState.cues.length} 条 · 偏移 ${$('referenceOffsetSeconds').value} 秒，将在下次标注时应用。`;setBusy(false);}});
+$('clearReference').addEventListener('click',()=>{if(running)return;++referenceGeneration;referenceLoading=false;$('referenceFile').value='';referenceState=null;resetForReferenceChange();$('referenceInfo').textContent='未使用辅助字幕（可选，不影响正常韩语标注）。';setBusy(false);});
 $('filterUntimedLines').addEventListener('change',()=>loadFile());
 $('subtitleFile').addEventListener('change',()=>loadFile());$('encoding').addEventListener('change',()=>loadFile());
 $('settings').addEventListener('click',()=>chrome.runtime.openOptionsPage());
 $('previewLimit').addEventListener('change',()=>{try{refreshPreview();}catch(error){report(error.message);}});
 $('start').addEventListener('click',async()=>{
- if(running||!documentState||loading)return;
+ if(running||!documentState||loading||referenceLoading)return;
  const generation=++runGeneration;
  const modes={hanja:$('hanja').checked,loanword:$('loanword').checked};
  if(!modes.hanja&&!modes.loanword){report('请至少启用一种标注。');return;}
@@ -48,7 +80,17 @@ $('start').addEventListener('click',async()=>{
   const [{progressiveAnnotation=false},settings]=await Promise.all([chrome.storage.local.get('progressiveAnnotation'),engineConfig()]);
   const parsedFingerprint=await fingerprintSrt(documentState.source);
   log('运行依据 '+JSON.stringify({input_sha256:inputFingerprint,parsed_sha256:parsedFingerprint,extension_version:chrome.runtime.getManifest().version,modes,nameProtection:settings.nameProtection,reviewAllCandidates:settings.reviewAllCandidates,manualModelReview:settings.manualModelReview,batchContextTier:settings.batchContextTier,smartSegmentation:settings.smartSegmentation,retryInvalidDictionaryChoices:settings.retryInvalidDictionaryChoices,discardInvalidReviewResults:settings.discardInvalidReviewResults,experimentalHanja:settings.experimentalHanja,experimentalLoanword:settings.experimentalLoanword,filterDictionaryPeople:settings.filterDictionaryPeople,hanjaReadingCheck:settings.hanjaReadingCheck,filterUntimedLines:$('filterUntimedLines').checked}));
-  const sentences=documentState.sentences;
+  // Auxiliary captions are advisory review context; annotation offsets and
+  // replacement positions always come from the untouched Korean document.
+  const referenceContexts=referenceState?
+   buildAuxiliaryContexts(documentState,referenceState.cues,$('referenceOffsetSeconds').value):{contexts:new Map(),matched:0,total:documentState.cues.length};
+  if(referenceState){
+   log(`辅助字幕：${referenceState.name}，时间近邻匹配 ${referenceContexts.matched}/${referenceContexts.total} 条韩语字幕；偏移 ${$('referenceOffsetSeconds').value} 秒（正数将辅助字幕后移）。`);
+   if(!referenceContexts.matched)log('提示：没有匹配到附近辅助台词，可调整偏移值，或移除辅助字幕后重新标注。');
+  }
+  const sentences=referenceState?documentState.sentences.map(s=>({...s,...(referenceContexts.contexts.get(s.cueIndex)?{
+   referenceContext:referenceContexts.contexts.get(s.cueIndex)
+  }:{})})):documentState.sentences;
   if(generation!==runGeneration)return;
   // Bound the existing pipeline operation; review batching still follows its saved tier.
   for(let start=0;start<sentences.length;start+=1000){
