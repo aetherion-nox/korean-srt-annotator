@@ -2,7 +2,7 @@ name: Verify and package SRT v1.0.43
 on:
   push:
     branches:
-      - feature/srt-v1.0.43-auxiliary-reference-subtitles
+      - feature/srt-v1.0.43-auto-bilingual-context
   pull_request:
     branches: [main]
   workflow_dispatch:
