@@ -7,6 +7,8 @@
 <div class="file-row"><label class="file-label">选择 SRT 文件<input id="subtitleFile" type="file" accept=".srt,application/x-subrip,text/plain"></label><label>输入编码<select id="encoding"><option value="auto">自动（UTF-8 / UTF-16 / CP949）</option><option value="utf-8">UTF-8</option><option value="euc-kr">CP949 / EUC-KR</option><option value="utf-16le">UTF-16 LE</option><option value="utf-16be">UTF-16 BE</option></select></label></div>
 <label class="hint"><input id="filterUntimedLines" type="checkbox" checked> 过滤无时间轴的行（默认开启，导出时也删除）</label>
 <p class="hint">过滤字幕条目外的说明、署名等文字；时间轴下的多行字幕正文会保留。切换后会重新导入当前文件。</p>
+<label class="hint"><input id="useBilingualReference" type="checkbox" checked> 自动识别韩语＋其他语言双语字幕，让大模型参考其中的其他语言（默认开启）</label>
+<p class="hint">同一条字幕内有独立的韩语和其他语言台词时，后者仅作为语义参考；始终只标注韩语。中文译文的汉字不能直接当作韩语词源。关闭此项后仍可单独导入外部辅助字幕。</p>
 <div class="auxiliary-upload">
 <p><strong>可选：导入其他语言的辅助字幕</strong></p>
 <p class="hint">例如同一集的中文、英文或日文 SRT。只用于帮助模型理解剧情和词义，不参与韩语分词、修改或导出。时间轴无需逐条吻合，程序按附近时间窗口匹配。</p>

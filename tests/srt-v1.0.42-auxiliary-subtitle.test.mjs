@@ -73,7 +73,7 @@ test('SRT module attaches reference per cue in both API and manual pipeline, and
  const pipeline=readFileSync(new URL('../annotation-pipeline.js',import.meta.url),'utf8');
  const html=readFileSync(new URL('../srt.html',import.meta.url),'utf8');
  for(const id of ['referenceFile','referenceEncoding','referenceOffsetSeconds','clearReference','referenceInfo'])assert.match(html,new RegExp('id="'+id+'"'));
- assert.match(page,/referenceContext:referenceContexts\.contexts\.get\(s\.cueIndex\)/);
+ assert.match(page,/buildSrtReferenceSentences\(documentState/);
  assert.match(page,/port\.postMessage\(\{type:'START',operationId,sentences/);
  assert.match(pipeline,/reference_context:sentence\.referenceContext/);
  assert.match(pipeline,/reference_context/);

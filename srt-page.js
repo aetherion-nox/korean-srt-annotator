@@ -3,15 +3,20 @@ import {engineConfig} from './local-engine.js';
 import {createSrtManualChannel} from './srt-manual-channel.js';
 import {completeManualAnswer} from './srt-manual-response.js';
 import {parseAuxiliarySrt,buildAuxiliaryContexts} from './srt-reference-context.js';
+import {buildSrtReferenceSentences,countBilingualCues} from './srt-bilingual-context.js';
 const $=id=>document.getElementById(id);
 let documentState=null,fileName='',results=new Map(),running=false,activePort=null,abortBatch=null,manualRequest=null,operationId='',hasRun=false,loading=false;
 let referenceState=null,referenceLoading=false,referenceGeneration=0;
 let stats={},currentStats={},previewTimer,loadGeneration=0,runGeneration=0;
 let inputFingerprint='',lastSubmittedAnswer=null;
+const BILINGUAL_PREF='srtUseBilingualReference';
+chrome.storage.local.get({[BILINGUAL_PREF]:true}).then(prefs=>{
+ if(!running)$('useBilingualReference').checked=prefs[BILINGUAL_PREF]!==false;
+}).catch(error=>log('双语辅助开关设置读取失败：'+error.message));
 const fields={local_determined:'localCount',pending:'pendingCount',model_resolved:'modelCount',unresolved:'unresolvedCount'};
 const report=message=>{$('status').textContent=message;};
 const log=message=>{const lines=$('logs').textContent.split('\n').filter(Boolean);lines.push(`${new Date().toLocaleTimeString()} ${message}`);$('logs').textContent=lines.slice(-200).join('\n');};
-function setBusy(value){running=value;for(const id of ['subtitleFile','encoding','filterUntimedLines','hanja','loanword','referenceFile','referenceEncoding','referenceOffsetSeconds','clearReference'])$(id).disabled=value||referenceLoading&&id.startsWith('reference');$('start').disabled=value||!documentState||loading||referenceLoading;$('cancel').disabled=!value;$('download').disabled=value||!documentState||!hasRun;}
+function setBusy(value){running=value;for(const id of ['subtitleFile','encoding','filterUntimedLines','hanja','loanword','referenceFile','referenceEncoding','referenceOffsetSeconds','clearReference','useBilingualReference'])$(id).disabled=value||referenceLoading&&id.startsWith('reference');$('start').disabled=value||!documentState||loading||referenceLoading;$('cancel').disabled=!value;$('download').disabled=value||!documentState||!hasRun;}
 function updateStats(){for(const [key,id] of Object.entries(fields))$(id).textContent=(stats[key]||0)+(currentStats[key]||0);}
 function previewSource(text){const limit=Number($('previewLimit').value);if(!limit)return text;const parsed=parseSrt(text);if(parsed.cues.length<=limit)return text;const blocks=text.split(/(?:\r\n|\n|\r)[ \t]*(?:\r\n|\n|\r)/u);return blocks.slice(0,limit).join('\n\n')+'\n\n…（完整字幕见下载文件）';}
 function refreshPreview(){clearTimeout(previewTimer);previewTimer=null;if(!documentState)return;$('original').textContent=previewSource(documentState.source);$('output').textContent=previewSource(renderSrt(documentState,results));}
@@ -30,7 +35,7 @@ async function loadFile(){
   const bytes=await file.arrayBuffer();const digest=await fingerprintSrt(bytes);if(generation!==loadGeneration)return;
   inputFingerprint=digest;
   const decoded=decodeSrt(bytes,encoding);documentState=parseSrt(decoded.text,{filterUntimedLines});fileName=file.name;
-  $('fileInfo').textContent=`${fileName} · ${documentState.cues.length} 条字幕 · ${documentState.sentences.length} 段韩语 · ${decoded.encoding} → UTF-8${filterUntimedLines?` · 已过滤 ${documentState.removedLineCount} 行无时间轴文字`:""}`;
+  $('fileInfo').textContent=`${fileName} · ${documentState.cues.length} 条字幕 · ${documentState.sentences.length} 段韩语 · ${decoded.encoding} → UTF-8${countBilingualCues(documentState)?` · 检测到 ${countBilingualCues(documentState)} 条带其他语言的双语字幕`:""}${filterUntimedLines?` · 已过滤 ${documentState.removedLineCount} 行无时间轴文字`:""}`;
   report(documentState.sentences.length?'已导入，可开始标注。':'未检测到需要分析的韩语；可直接导出原字幕。');refreshPreview();
  }catch(error){if(generation!==loadGeneration)return;$('fileInfo').textContent=error.message;report('导入失败，请检查 SRT 格式或编码。');}
  finally{if(generation===loadGeneration){loading=false;setBusy(false);}}
@@ -39,7 +44,7 @@ function resetForReferenceChange(){
  if(!hasRun)return;
  hasRun=false;results=new Map();stats={};currentStats={};updateStats();$('progress').value=0;
  try{refreshPreview();}catch(error){log(error.message);}
- report('辅助字幕或时间偏移已改变。请重新开始标注，原韩语字幕保持不变。');
+ report('辅助上下文设置已改变。请重新开始标注，原韩语字幕保持不变。');
 }
 async function loadReferenceFile(){
  if(running)return;
@@ -65,6 +70,12 @@ $('referenceFile').addEventListener('change',loadReferenceFile);
 $('referenceEncoding').addEventListener('change',loadReferenceFile);
 $('referenceOffsetSeconds').addEventListener('change',()=>{if(!running){resetForReferenceChange();if(referenceState)$('referenceInfo').textContent=`${referenceState.name} · ${referenceState.cues.length} 条 · 偏移 ${$('referenceOffsetSeconds').value} 秒，将在下次标注时应用。`;setBusy(false);}});
 $('clearReference').addEventListener('click',()=>{if(running)return;++referenceGeneration;referenceLoading=false;$('referenceFile').value='';referenceState=null;resetForReferenceChange();$('referenceInfo').textContent='未使用辅助字幕（可选，不影响正常韩语标注）。';setBusy(false);});
+$('useBilingualReference').addEventListener('change',()=>{
+ if(running)return;
+ const enabled=$('useBilingualReference').checked;
+ chrome.storage.local.set({[BILINGUAL_PREF]:enabled}).catch(error=>log('保存双语辅助开关失败：'+error.message));
+ resetForReferenceChange();setBusy(false);
+});
 $('filterUntimedLines').addEventListener('change',()=>loadFile());
 $('subtitleFile').addEventListener('change',()=>loadFile());$('encoding').addEventListener('change',()=>loadFile());
 $('settings').addEventListener('click',()=>chrome.runtime.openOptionsPage());
@@ -79,7 +90,7 @@ $('start').addEventListener('click',async()=>{
   report('正在准备标注…');
   const [{progressiveAnnotation=false},settings]=await Promise.all([chrome.storage.local.get('progressiveAnnotation'),engineConfig()]);
   const parsedFingerprint=await fingerprintSrt(documentState.source);
-  log('运行依据 '+JSON.stringify({input_sha256:inputFingerprint,parsed_sha256:parsedFingerprint,extension_version:chrome.runtime.getManifest().version,modes,nameProtection:settings.nameProtection,reviewAllCandidates:settings.reviewAllCandidates,manualModelReview:settings.manualModelReview,batchContextTier:settings.batchContextTier,smartSegmentation:settings.smartSegmentation,retryInvalidDictionaryChoices:settings.retryInvalidDictionaryChoices,discardInvalidReviewResults:settings.discardInvalidReviewResults,experimentalHanja:settings.experimentalHanja,experimentalLoanword:settings.experimentalLoanword,filterDictionaryPeople:settings.filterDictionaryPeople,hanjaReadingCheck:settings.hanjaReadingCheck,filterUntimedLines:$('filterUntimedLines').checked}));
+  log('运行依据 '+JSON.stringify({input_sha256:inputFingerprint,parsed_sha256:parsedFingerprint,extension_version:chrome.runtime.getManifest().version,modes,nameProtection:settings.nameProtection,reviewAllCandidates:settings.reviewAllCandidates,manualModelReview:settings.manualModelReview,batchContextTier:settings.batchContextTier,smartSegmentation:settings.smartSegmentation,retryInvalidDictionaryChoices:settings.retryInvalidDictionaryChoices,discardInvalidReviewResults:settings.discardInvalidReviewResults,experimentalHanja:settings.experimentalHanja,experimentalLoanword:settings.experimentalLoanword,filterDictionaryPeople:settings.filterDictionaryPeople,hanjaReadingCheck:settings.hanjaReadingCheck,filterUntimedLines:$('filterUntimedLines').checked,useBilingualReference:$('useBilingualReference').checked,bilingualCuesDetected:countBilingualCues(documentState)}));
   // Auxiliary captions are advisory review context; annotation offsets and
   // replacement positions always come from the untouched Korean document.
   const referenceContexts=referenceState?
@@ -88,9 +99,12 @@ $('start').addEventListener('click',async()=>{
    log(`辅助字幕：${referenceState.name}，时间近邻匹配 ${referenceContexts.matched}/${referenceContexts.total} 条韩语字幕；偏移 ${$('referenceOffsetSeconds').value} 秒（正数将辅助字幕后移）。`);
    if(!referenceContexts.matched)log('提示：没有匹配到附近辅助台词，可调整偏移值，或移除辅助字幕后重新标注。');
   }
-  const sentences=referenceState?documentState.sentences.map(s=>({...s,...(referenceContexts.contexts.get(s.cueIndex)?{
-   referenceContext:referenceContexts.contexts.get(s.cueIndex)
-  }:{})})):documentState.sentences;
+  const useBilingual=$('useBilingualReference').checked;
+  const sentences=buildSrtReferenceSentences(documentState,{
+   useBilingual,externalContexts:referenceContexts.contexts
+  });
+  if(useBilingual&&countBilingualCues(documentState))
+   log(`双语字幕参考已启用：识别到 ${countBilingualCues(documentState)} 条同时间轴翻译，仅用于模型语义消歧。`);
   if(generation!==runGeneration)return;
   // Bound the existing pipeline operation; review batching still follows its saved tier.
   for(let start=0;start<sentences.length;start+=1000){

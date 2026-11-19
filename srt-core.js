@@ -1,6 +1,7 @@
 import {projectAnnotation} from './local-engine.js';
 import {extractInlineHanjaPairs} from './inline-hanja-evidence.js';
 import {splitText} from './text-chunks.js';
+import {extractBilingualReference} from './srt-bilingual-context.js';
 
 const HANGUL=/[가-힣ㄱ-ㅎㅏ-ㅣ]/u;
 const KOREAN_RUN=/[가-힣ㄱ-ㅎㅏ-ㅣ0-9]+(?:[ \t.,!?…，。！？、:;'"“”‘’·\-–—~〜]*[가-힣ㄱ-ㅎㅏ-ㅣ0-9]+)*/gu;
@@ -62,7 +63,8 @@ export function parseSrt(source,{filterUntimedLines=true}={}){
   if(!/^\d+$/.test(index)||!time)throw Error(`SRT 格式无效：第 ${cues.length+1} 条字幕需要序号和有效时间轴。`);
   const ms=offset=>((Number(time[offset])*60+Number(time[offset+1]))*60+Number(time[offset+2]))*1000+Number(time[offset+3]);
   if(ms(5)<ms(1))throw Error(`第 ${index} 条字幕的结束时间早于开始时间。`);
-  const cue={index,time:block[1].text,lineCount:Math.max(0,block.length-2)};cues.push(cue);
+  const bilingualReference=extractBilingualReference(block.slice(2).map(line=>line.text));
+  const cue={index,time:block[1].text,lineCount:Math.max(0,block.length-2),...(bilingualReference?{bilingualReference}:{})};cues.push(cue);
   const runs=[];
   for(const line of block.slice(2)){
    const add=(start,end)=>{

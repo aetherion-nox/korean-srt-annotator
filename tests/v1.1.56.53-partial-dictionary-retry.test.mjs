@@ -16,7 +16,7 @@ const target=(id,surface,options=[])=>({
 test('new switch defaults on and new Chrome content script can load recovery parser',()=>{
  assert.equal(ENGINE_SWITCH_DEFAULTS.retryInvalidDictionaryChoices,true);
  const manifest=JSON.parse(readFileSync(new URL('../manifest.json',import.meta.url),'utf8'));
- assert.equal(manifest.version,'1.0.42');
+ assert.equal(manifest.version,'1.0.43');
  // SRT runs inside its workbench; the parser is an internal module.
  assert.match(readFileSync(new URL('../choice-review.js',import.meta.url),'utf8'),/partial-review-json/);
  assert.match(readFileSync(new URL('../manual-review.js',import.meta.url),'utf8'),/partial-review-json/);
