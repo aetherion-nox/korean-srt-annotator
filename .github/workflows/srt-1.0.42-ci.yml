@@ -2,7 +2,7 @@ name: Verify and package SRT v1.0.42
 on:
   push:
     branches:
-      - feature/srt-v1.0.42-web-1.1.56.61
+      - feature/srt-v1.0.42-auxiliary-reference-subtitles
   pull_request:
     branches: [main]
   workflow_dispatch:
