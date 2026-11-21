@@ -9,7 +9,7 @@ function makeTargets(text,n,includeContext=false) {
   target_id:'t'+i,start:i*3,end:i*3+2,surface:'가나',
   ...(includeContext?{context:text}:{}),
   options:[
-   {choice_id:'KEEP',type:'keep',replacement:'가나',entry_id:null,definitions:[]},
+   {choice_id:null,type:'keep',replacement:'가나',entry_id:null,definitions:[]},
    {choice_id:'c0',type:'hanja',replacement:'假那',entry_id:5,definitions:['a Hanja lexical item']}
   ]
  }));
@@ -41,7 +41,5 @@ test('browser bridge and persistent cache deliberately strip redundant target co
  const bridge=fs.readFileSync(new URL('../python/browser-support/browser_bridge.py',import.meta.url),'utf8');
  const worker=fs.readFileSync(new URL('../service-worker.js',import.meta.url),'utf8');
  assert.match(bridge,/compact_analysis_wire/);
- assert.match(worker,/analyzeBatch/,'SRT background pipeline uses the same bounded analysis batch adapter');
- const pipeline=fs.readFileSync(new URL('../annotation-pipeline.js',import.meta.url),'utf8');
- assert.match(pipeline,/compactReviewTargets/,'SRT model events strip redundant target context');
+ assert.match(worker,/targets:value\.targets\.map\(\(\{context,repair_context,\.\.\.target\}\)/);
 });

@@ -5,7 +5,7 @@ import {runSentencePipeline} from '../annotation-pipeline.js';
 import {summarizeExperimentalHanjaAnswers} from '../experimental-hanja-diagnostics.js';
 import {createManualReviewSession} from '../manual-review.js';
 
-const keep=s=>({choice_id:'KEEP',type:'keep',replacement:s,entry_id:null,definitions:[]});
+const keep=s=>({choice_id:null,type:'keep',replacement:s,entry_id:null,definitions:[]});
 const target=(id,surface,flags={})=>({target_id:id,start:0,end:surface.length,
  surface,context:surface,options:[keep(surface)],...flags});
 const audit=(target,choice,config={})=>summarizeExperimentalHanjaAnswers(

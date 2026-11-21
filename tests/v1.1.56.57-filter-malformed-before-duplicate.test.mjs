@@ -5,7 +5,7 @@ import {createManualReviewSession} from '../manual-review.js';
 import {parsePartialReviewJson} from '../partial-review-json.js';
 import {choicePreviewParser} from '../model-stream.js';
 
-const keep=s=>({choice_id:'KEEP',type:'keep',replacement:s,entry_id:null,definitions:[]});
+const keep=s=>({choice_id:null,type:'keep',replacement:s,entry_id:null,definitions:[]});
 const choice=(id,r)=>({choice_id:id,type:'hanja',replacement:r,entry_id:id,definitions:['test']});
 const target=(id,s)=>({target_id:id,start:0,end:s.length,surface:s,context:s,
  options:[keep(s),choice('c0','可'),choice('c1','加')]});

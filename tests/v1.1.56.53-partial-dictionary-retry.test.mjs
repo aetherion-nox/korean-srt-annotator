@@ -6,7 +6,7 @@ import {validateChoices,validateExperimentalChoices,reviewTargets} from '../choi
 import {createManualReviewSession} from '../manual-review.js';
 import {ENGINE_SWITCH_DEFAULTS} from '../engine-defaults.js';
 
-const keep=s=>({choice_id:'KEEP',type:'keep',replacement:s,entry_id:null,definitions:[]});
+const keep=s=>({choice_id:null,type:'keep',replacement:s,entry_id:null,definitions:[]});
 const hanja=(id,repl)=>({choice_id:id,type:'hanja',replacement:repl,entry_id:id,definitions:['test']});
 const target=(id,surface,options=[])=>({
  target_id:id,start:0,end:surface.length,surface,context:surface,
@@ -16,8 +16,7 @@ const target=(id,surface,options=[])=>({
 test('new switch defaults on and new Chrome content script can load recovery parser',()=>{
  assert.equal(ENGINE_SWITCH_DEFAULTS.retryInvalidDictionaryChoices,true);
  const manifest=JSON.parse(readFileSync(new URL('../manifest.json',import.meta.url),'utf8'));
- assert.equal(manifest.version,'1.0.43');
- // SRT runs inside its workbench; the parser is an internal module.
+ assert.equal(manifest.version,'1.0.44');
  assert.match(readFileSync(new URL('../choice-review.js',import.meta.url),'utf8'),/partial-review-json/);
  assert.match(readFileSync(new URL('../manual-review.js',import.meta.url),'utf8'),/partial-review-json/);
 });
@@ -52,7 +51,7 @@ test('invalid numbered dictionary key is unresolved without rejecting valid unre
  assert.deepEqual(reviewed.unresolved.map(row=>row.target_id),['t1']);
  assert.deepEqual(reviewed.invalidDictionaryChoiceIds,['t1']);
  const old=validateChoices([targets[1]],{results:[{t:'t1',c:'c99'}]},
-  {retryInvalidDictionaryChoices:false,reviewPosFilter:false});
+  {discardInvalidReviewResults:true,retryInvalidDictionaryChoices:false,reviewPosFilter:false});
  assert.equal(old.accepted[0].option.type,'keep');
 });
 
@@ -60,8 +59,9 @@ test('experimental free-form origin rejection does not enter dictionary correcti
  const t=target('t0','사람',[]);
  const result=validateExperimentalChoices([t],{results:[{t:'t0',c:'Some Bad Etymology'}]},
   {retryInvalidDictionaryChoices:true,experimentalHanja:true,reviewPosFilter:false});
- assert.equal(result.invalidDictionaryChoiceIds.length,0);
- assert.equal(result.accepted[0].option.type,'keep');
+ assert.deepEqual(result.invalidDictionaryChoiceIds,['t0']);
+ assert.equal(result.accepted.length,0);
+ assert.deepEqual(result.unresolved.map(t=>t.target_id),['t0']);
 });
 
 test('API accepts valid answers, then only re-asks incorrect dictionary target',async()=>{

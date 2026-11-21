@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {parsePartialReviewJson} from '../partial-review-json.js';
 import {validateChoices,validateExperimentalChoices,reviewTargets} from '../choice-review.js';
 import {createManualReviewSession} from '../manual-review.js';
-const keep=s=>({choice_id:'KEEP',type:'keep',replacement:s,entry_id:null,definitions:[]});
+const keep=s=>({choice_id:null,type:'keep',replacement:s,entry_id:null,definitions:[]});
 const hanja=(id,writing)=>({choice_id:id,type:'hanja',replacement:writing,entry_id:id,definitions:['test']});
 const target=(id,surface)=>({target_id:id,start:0,end:surface.length,surface,context:surface,
  options:[keep(surface),hanja('c0','可')]});

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {validateChoices,validateExperimentalChoices,reviewTargets} from '../choice-review.js';
 import {createManualReviewSession} from '../manual-review.js';
 
-const keep=s=>({choice_id:'KEEP',type:'keep',replacement:s,entry_id:null,definitions:[]});
+const keep=s=>({choice_id:null,type:'keep',replacement:s,entry_id:null,definitions:[]});
 const hanja=(id,v)=>({choice_id:id,type:'hanja',replacement:v,entry_id:id,definitions:['test']});
 const target=(id,s)=>({target_id:id,start:0,end:s.length,surface:s,context:s,
  options:[keep(s),hanja('c0','可'),hanja('c1','加')]});

@@ -13,7 +13,7 @@ const document=parseSrt(source);
 const reference=parseAuxiliarySrt(aux);
 const target={
  target_id:'t0',surface:'정부',start:0,end:2,context:'정부가 발표했다.',
- options:[{choice_id:'KEEP',type:'keep',replacement:'정부',entry_id:null,definitions:[]},
+ options:[{choice_id:null,type:'keep',replacement:'정부',entry_id:null,definitions:[]},
   {choice_id:'c0',type:'hanja',replacement:'政府',entry_id:1,definitions:['government']}]
 };
 test('auxiliary SRT accepts non-Korean captions and strips inline styling',()=>{

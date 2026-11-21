@@ -15,7 +15,7 @@ const doc=parseSrt(sample);
 const target=(ref)=>({
  target_id:'t0',start:0,end:2,surface:'학교',context:'학교에 갑니다.',
  ...(ref?{reference_context:ref}:{}),
- options:[{choice_id:'KEEP',type:'keep',replacement:'학교',entry_id:null,definitions:[]},
+ options:[{choice_id:null,type:'keep',replacement:'학교',entry_id:null,definitions:[]},
  {choice_id:'c0',type:'hanja',replacement:'學校',entry_id:1,definitions:['school']}]
 });
 

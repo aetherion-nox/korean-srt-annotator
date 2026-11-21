@@ -11,14 +11,14 @@ const html=await fs.readFile(new URL('../options.html',import.meta.url),'utf8');
 const engineScript=await fs.readFile(new URL('../engine-settings.js',import.meta.url),'utf8');
 const catalog=globalThis.KRA_MODEL_CATALOG;
 const target={target_id:'t0',start:0,end:2,surface:'경제',context:'경제',
- options:[{choice_id:'KEEP',type:'keep',replacement:'경제',entry_id:null,definitions:[]}]};
+ options:[{choice_id:null,type:'keep',replacement:'경제',entry_id:null,definitions:[]}]};
 const answer=JSON.stringify({results:[{t:'t0',c:null}]});
 
 test('fresh engine defaults match the photographed switches; 1M is a separate default',async()=>{
  assert.deepEqual(ENGINE_SWITCH_DEFAULTS,{
   enableModelReview:true,preloadEngineOnStartup:true,nameProtection:true,
   filterDictionaryPeople:true,reviewPosFilter:true,experimentalHanja:true,
-  hanjaReadingCheck:true,experimentalLoanword:true,smartSegmentation:true,
+  hanjaReadingCheck:false,experimentalLoanword:true,smartSegmentation:true,
   reviewLocalConversions:true,retryInvalidDictionaryChoices:true,discardInvalidReviewResults:false,reviewAllCandidates:false,manualModelReview:true
  });
  assert.equal(normalizeBatchContextTier(undefined),'1m');
@@ -62,6 +62,7 @@ test('reset button changes only the 14 switches and leaves batch size, keys, log
  const ctx={
   $:id=>controls[id],ENGINE_SWITCH_DEFAULTS,importedDictionary:true,
   status:{textContent:'original'},show:()=>{},t:()=> 'Restored',
+  syncHanjaReadingCheckUI:()=>{},
   chrome:{storage:{local:{set:async patch=>{
    patches.push(Object.keys(patch).sort());Object.assign(stored,patch);
   }}}}

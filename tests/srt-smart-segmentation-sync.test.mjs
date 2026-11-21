@@ -27,7 +27,7 @@ test('SRT keeps time, English, markup and positions when repaired annotations re
 });
 
 test('experimental prompt is opt-in and shares dictionary pools', () => {
- const target={target_id:'t0',start:0,end:2,surface:'경제',context:'경제',options:[{choice_id:'KEEP',type:'keep',replacement:'경제',entry_id:null,definitions:[]},{choice_id:'c0',type:'hanja',replacement:'經濟',entry_id:12,definitions:['economy']}]};
+ const target={target_id:'t0',start:0,end:2,surface:'경제',context:'경제',options:[{choice_id:null,type:'keep',replacement:'경제',entry_id:null,definitions:[]},{choice_id:'c0',type:'hanja',replacement:'經濟',entry_id:12,definitions:['economy']}]};
  const basic=buildReviewInstructions({});
  assert.doesNotMatch(basic,/repairs|actively check whether the dictionary/i);
  assert.match(buildReviewInstructions({smartSegmentation:true}),/repairs/);

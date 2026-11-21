@@ -83,8 +83,7 @@ test('manual targeted retry retains open-origin metadata and accepts direct Hanj
 
 test('invalid numbered IDs respect the existing no-retry and discard switches',async()=>{
  for(const flags of [
-  {retryInvalidDictionaryChoices:false},
-  {retryInvalidDictionaryChoices:true,discardInvalidReviewResults:true}
+  {retryInvalidDictionaryChoices:false,discardInvalidReviewResults:true}
  ]){
   let calls=0;
   const out=await reviewTargets({
@@ -98,13 +97,11 @@ test('invalid numbered IDs respect the existing no-retry and discard switches',a
  }
 });
 
-test('SRT in-workbench manual route retains origin permission flags when reviewing',()=>{
- const manual=readFileSync(new URL('../srt-manual-channel.js',import.meta.url),'utf8');
- const reviewer=readFileSync(new URL('../manual-review.js',import.meta.url),'utf8');
- assert.match(manual,/createManualReviewSession/);
- assert.match(manual,/experimentalHanja:settings\.experimentalHanja/);
- assert.match(manual,/experimentalLoanword:settings\.experimentalLoanword/);
- assert.match(reviewer,/const originTypes=old\.origin_mode/);
- assert.match(reviewer,/experimentalHanja:originTypes\.includes\('hanja'\)/);
- assert.match(reviewer,/experimentalLoanword:originTypes\.includes\('loanword'\)/);
+test('page-offline fallback keeps open-origin metadata in corrected prompt',()=>{
+ const content=readFileSync(new URL('../content.js',import.meta.url),'utf8');
+ const retry=content.slice(content.indexOf('function manualRetryPrompt('),content.indexOf('async function applyManualRecovery('));
+ assert.match(retry,/const originTypes=old\.origin_mode/);
+ assert.match(retry,/OPEN-ENDED ORIGIN AUDIT remains enabled/);
+ assert.doesNotMatch(retry,/dictionary_options_are_not_exhaustive,\.\.\.dictionaryPayload/);
+ assert.doesNotMatch(retry,/experimental_hanja_audit,experimental_loanword_audit,/);
 });

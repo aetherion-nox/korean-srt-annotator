@@ -4,7 +4,7 @@ import {buildReviewInstructions,buildManualPrompt,buildReviewPayload,REVIEW_INST
 import {validateChoices,validateExperimentalChoices} from '../choice-review.js';
 
 const t={target_id:'t0',start:0,end:2,surface:'한국',context:'한국',options:[
- {choice_id:'KEEP',type:'keep',replacement:'한국',entry_id:null,definitions:[]},
+ {choice_id:null,type:'keep',replacement:'한국',entry_id:null,definitions:[]},
  {choice_id:'c0',type:'hanja',replacement:'韓國',entry_id:42,definitions:['Korea']},
  {choice_id:'n0',type:'nonconversion',replacement:'한국',entry_id:43,definitions:['native meaning']}
 ]};
@@ -73,10 +73,10 @@ test('smart segmentation and dictionary-free origin instructions are independent
 
 test('prompt refactor never changes c/n/null and experimental validation rules',()=>{
  for(const [value,expected] of [['c0','hanja'],['n0','nonconversion'],[null,'keep'],['c999','keep']]){
-  const plain=validateChoices([t],{results:[{t:'t0',c:value}]},{retryInvalidDictionaryChoices:false});
+  const plain=validateChoices([t],{results:[{t:'t0',c:value}]},{discardInvalidReviewResults:true});
   assert.equal(plain.accepted[0].option.type,expected);
  }
- const ordinary=validateChoices([t],{results:[{t:'t0',c:'韓國'}]});
+ const ordinary=validateChoices([t],{results:[{t:'t0',c:'韓國'}]},{discardInvalidReviewResults:true});
  assert.equal(ordinary.accepted[0].option.type,'keep');
  const origin=validateExperimentalChoices([t],{results:[{t:'t0',c:'韓國'}]},{experimentalHanja:true});
  assert.equal(origin.accepted.length,1);

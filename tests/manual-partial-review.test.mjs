@@ -5,7 +5,7 @@ import {createManualReviewSession} from '../manual-review.js';
 test('background keeps valid choices, asks only for missing IDs and merges retry',async()=>{
  const events=[];
  const session=createManualReviewSession({operationId:'op',post:e=>events.push(e)});
- const base={context:'가나',options:[{choice_id:'KEEP',type:'keep',entry_id:null,definitions:[],replacement:'가'},
+ const base={context:'가나',options:[{choice_id:null,type:'keep',entry_id:null,definitions:[],replacement:'가'},
    {choice_id:'c0',type:'hanja',entry_id:1,definitions:['词义'],replacement:'可'}]};
  const targets=[{...base,target_id:'original0',surface:'가',start:0,end:1},
    {...base,target_id:'original1',surface:'나',start:1,end:2}];
@@ -42,7 +42,7 @@ test('background keeps valid choices, asks only for missing IDs and merges retry
 test('invalid batch ID never saves any partial answers',async()=>{
  const events=[],session=createManualReviewSession({operationId:'op',post:e=>events.push(e)});
  const target={target_id:'original0',start:0,end:1,surface:'가',context:'가',options:[
-   {choice_id:'KEEP',type:'keep',replacement:'가',definitions:[]}]};
+   {choice_id:null,type:'keep',replacement:'가',definitions:[]}]};
  const pending=session.request({manualPrepared:{requestId:'batch',text:'review',bindings:[]}},[target]);
  assert.equal(session.submit({operationId:'op',requestId:'batch',text:JSON.stringify({
    batch_id:'wrong',results:[{t:'t0',c:null}]})}),false);
@@ -59,7 +59,7 @@ test('scan-only segmentation probes are excluded from all manual answer totals',
  const make=(id,start,surface,scan=false)=>({
   target_id:id,start,end:start+surface.length,surface,context,
   repair_sentence_key:'sentence0',scan_only:scan,
-  options:[{choice_id:'KEEP',type:'keep',replacement:surface,entry_id:null,definitions:[]}]
+  options:[{choice_id:null,type:'keep',replacement:surface,entry_id:null,definitions:[]}]
  });
  const targets=[make('a',0,'가'),make('b',1,'나'),make('probe1',3,'다',true),make('probe2',4,'라',true)];
  const result=session.request({context,smartSegmentation:true,reviewPosFilter:true,retryInvalidDictionaryChoices:false},targets);

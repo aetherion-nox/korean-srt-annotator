@@ -12,7 +12,7 @@ const target={
   {form:'가나다라',tag:'NNG',start:0,end:4},
   {form:'마바사',tag:'NNG',start:5,end:8}
  ],protected_ranges:[]},
- options:[{choice_id:'KEEP',type:'keep',replacement:'가나다라',entry_id:null,definitions:[]},
+ options:[{choice_id:null,type:'keep',replacement:'가나다라',entry_id:null,definitions:[]},
   {choice_id:'c0',type:'hanja',replacement:'可那多羅',entry_id:1,definitions:['dictionary definition']}]
 };
 

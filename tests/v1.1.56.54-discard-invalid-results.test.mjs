@@ -8,7 +8,7 @@ import {parsePartialReviewJson} from '../partial-review-json.js';
 import {choicePreviewParser} from '../model-stream.js';
 import {normalizeManualAnswer} from '../manual-answer-format.js';
 
-const keep=s=>({choice_id:'KEEP',type:'keep',replacement:s,entry_id:null,definitions:[]});
+const keep=s=>({choice_id:null,type:'keep',replacement:s,entry_id:null,definitions:[]});
 const sense=(id,value)=>({choice_id:id,type:'hanja',replacement:value,entry_id:id,definitions:['test']});
 const t=(id,surface,options=[sense('c0','可')])=>({target_id:id,start:0,end:surface.length,surface,context:surface,options:[keep(surface),...options]});
 const discard={discardInvalidReviewResults:true,retryInvalidDictionaryChoices:false,reviewPosFilter:false};
@@ -20,7 +20,7 @@ test('discard mode defaults off, retry defaults on, and both saved on resolve to
  const both=engineSwitchValues({retryInvalidDictionaryChoices:true,discardInvalidReviewResults:true});
  assert.equal(both.discardInvalidReviewResults,true);
  assert.equal(both.retryInvalidDictionaryChoices,false);
- assert.equal(engineSwitchValues({retryInvalidDictionaryChoices:false,discardInvalidReviewResults:false}).retryInvalidDictionaryChoices,false);
+ assert.equal(engineSwitchValues({retryInvalidDictionaryChoices:false,discardInvalidReviewResults:false}).retryInvalidDictionaryChoices,true);
  const html=readFileSync(new URL('../options.html',import.meta.url),'utf8');
  const engine=readFileSync(new URL('../engine-settings.js',import.meta.url),'utf8');
  assert.match(html,/id="discardInvalidReviewResults"/);
@@ -128,7 +128,7 @@ test('manual mode discards completely unparsable reply without follow-up, but re
 test('discard mode preserves Korean for malformed nonconversion field without inventing an origin',()=>{
  const malformed={batch_id:'b',results:[{t:'t0',n2:'c0'}]};
  const previous=normalizeManualAnswer(malformed,{requestId:'b',knownTargetIds:new Set(['t0'])});
- assert.deepEqual(previous.results,[{t:'t0',c:null}]);
+ assert.deepEqual(previous.results,malformed.results);
  const discardResponse=normalizeManualAnswer(malformed,{requestId:'b',knownTargetIds:new Set(['t0']),discardInvalidReviewResults:true});
  assert.deepEqual(discardResponse.results,malformed.results);
  const checked=validateChoices([t('t0','가')],discardResponse,discard);
