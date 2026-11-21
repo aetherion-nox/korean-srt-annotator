@@ -16,7 +16,7 @@ from app.services.dictionary import DictionaryService
 from app.services.disambiguation import DisambiguationService
 from app.database import validate_database
 
-ENGINE_VERSION = '34fd08a7d03706a21a2c2e1b00571f2d838cd508:kra-name-homograph-1.1.55'
+ENGINE_VERSION = '34fd08a7d03706a21a2c2e1b00571f2d838cd508:kra-null-only-origin-1.1.56.64'
 DEFAULT_DB = Path(__file__).resolve().parent / 'hanja_dict.db'
 
 class _SpanIndex:
@@ -382,7 +382,7 @@ class Engine:
         if modes.get('hanja',True):
             for number,component in enumerate(components):
                 start=min(x[0] for x in component);end=max(x[1] for x in component)
-                options=[dict(choice_id='KEEP',type='keep',replacement=text[start:end],entry_id=None,definitions=[])]
+                options=[dict(choice_id=None,type='keep',replacement=text[start:end],entry_id=None,definitions=[])]
                 if self.dictionary is not None:
                     # Dictionary readings that preserve Korean are explicit sense options.
                     # A sense of a subspan cannot explain the whole merged
@@ -420,7 +420,7 @@ class Engine:
             for annotation in loan['annotations']:
                 overlapping=hanja_target_index.overlaps(annotation['start'],annotation['end'])
                 if overlapping:
-                    loan['targets'].append(dict(start=annotation['start'],end=annotation['end'],surface=annotation['surface'],context=text,options=[dict(choice_id='KEEP',type='keep',replacement=annotation['surface'],entry_id=None,definitions=[]),dict(choice_id='c0',type='loanword',replacement=annotation['replacement'],entry_id=annotation['entry_id'],definitions=annotation['definitions'])]))
+                    loan['targets'].append(dict(start=annotation['start'],end=annotation['end'],surface=annotation['surface'],context=text,options=[dict(choice_id=None,type='keep',replacement=annotation['surface'],entry_id=None,definitions=[]),dict(choice_id='c0',type='loanword',replacement=annotation['replacement'],entry_id=annotation['entry_id'],definitions=annotation['definitions'])]))
                 else:annotations.append({k:v for k,v in annotation.items() if k not in ('entry_id','definitions')})
             targets=merge_targets(text,targets+loan['targets'])
         loanwords_at=perf_counter()
@@ -428,7 +428,7 @@ class Engine:
         phase('audits','start')
         targets=sorted(targets+mixed['targets']+homograph_targets+suspect_targets,key=lambda t:(t['start'],t['end']))
         # Only opt-in experimental Latin review gets additional proper-name
-        # targets. Keep local person protection: these are KEEP-only options,
+        # targets. Keep local person protection: these have only null/no-conversion options,
         # never an automatic conversion or a speculative Hanja reading.
         if modes.get('experimentalLoanwordAudit',False) and modes.get('loanword',False):
             covered=_SpanIndex([(t['start'],t['end']) for t in targets]+
@@ -449,7 +449,7 @@ class Engine:
                 if covered.overlaps(start,end):continue
                 targets.append(dict(target_id='latin-audit',start=start,end=end,surface=word,
                     context=text,experimental_loanword_audit=True,
-                    options=[dict(choice_id='KEEP',type='keep',replacement=word,
+                    options=[dict(choice_id=None,type='keep',replacement=word,
                                   entry_id=None,definitions=[])]))
                 covered.add(start,end)
             targets.sort(key=lambda t:(t['start'],t['end']))
@@ -497,7 +497,7 @@ class Engine:
                         continue
                     targets.append(dict(target_id='hanja-audit',start=start,end=end,surface=word,
                         context=text,experimental_hanja_audit=True,
-                        options=[dict(choice_id='KEEP',type='keep',replacement=word,
+                        options=[dict(choice_id=None,type='keep',replacement=word,
                                       entry_id=None,definitions=[])]))
                     target_index.add(start,end)
                 targets.sort(key=lambda t:(t['start'],t['end']))
@@ -514,7 +514,7 @@ class Engine:
                     continue
                 target=overlapping[0] if overlapping else dict(
                     start=start,end=end,surface=text[a:b],context=text,
-                    options=[dict(choice_id='KEEP',type='keep',replacement=text[a:b],
+                    options=[dict(choice_id=None,type='keep',replacement=text[a:b],
                                   entry_id=None,definitions=[])])
                 if not overlapping:targets.append(target)
                 trusted=target.setdefault('verified_person_hanja',[])
@@ -553,10 +553,10 @@ class Engine:
                         seen.add(key)
                         native.append({**option,'choice_id':f'n{len(native)}','definitions':[definition]})
                 else:conversions.append({**option,'choice_id':f'c{len(conversions)}','definitions':definitions})
-            target['options']=[dict(choice_id='KEEP',type='keep',replacement=target['surface'],entry_id=None,definitions=[])]+native+conversions
+            target['options']=[dict(choice_id=None,type='keep',replacement=target['surface'],entry_id=None,definitions=[])]+native+conversions
             if removed_person_sense and not native and not conversions:
                 filtered_person_only.add(id(target))
-        # Do not send person-only remnants (KEEP with no lexical sense) to the
+        # Do not send person-only remnants (null choice with no lexical sense) to the
         # model, which could otherwise invent an experimental origin for a name.
         if filtered_person_only:
             targets=[target for target in targets if id(target) not in filtered_person_only]

@@ -155,7 +155,7 @@ async def collect_mixed(engine,text,tokens,modes,*,whole_word_ranges=(),blocked_
         if ranges and start<ranges[-1][1] and ranges[-1][0]<end:continue
         all_records=entries.get(word,[])
         # Ordinary perfectly aligned single-origin Hanja/native headwords are
-        # completely owned by Converter or the native KEEP path. The former
+        # completely owned by Converter or the native no-conversion path. The former
         # implementation still built full alignment trees and options for
         # these words, then discarded every option below. This fast path
         # preserves skipped_mixed: none of these forms can fail alignment,
@@ -224,7 +224,7 @@ async def collect_mixed(engine,text,tokens,modes,*,whole_word_ranges=(),blocked_
             for p in options[0]['segments']:
                 annotations.append({**p,'start':to_utf16(text,start)+p['start'],'end':to_utf16(text,start)+p['end']})
         else:
-            keep=dict(choice_id='KEEP',type='keep',replacement=word,entry_id=None,definitions=[])
+            keep=dict(choice_id=None,type='keep',replacement=word,entry_id=None,definitions=[])
             native=nonconversion_options(word,records,hanja=modes.get('hanja',True),loanword=modes.get('loanword',False))
             targets.append(dict(target_id=f'mixed{len(targets)}',start=to_utf16(text,start),end=to_utf16(text,end),surface=word,context=text,options=[keep]+native+options))
     return dict(annotations=annotations,targets=targets,ranges=ranges,skipped_mixed=skipped)
