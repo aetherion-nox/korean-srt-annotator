@@ -47,6 +47,7 @@ export function buildReviewInstructions(config={}){
  }
  const experimental=config.experimentalHanja===true||config.experimentalLoanword===true;
  const generated=experimental?buildExperimentalOriginInstructions(config):'';
+ const reference=config.referenceSubtitle===true?REFERENCE_SUBTITLE_GUIDANCE:'';
  const noDictionary=experimental&&config.dictionaryFree===true?[
   'OPEN-ENDED ORIGIN AUDIT: no external dictionary was loaded; empty options do not prohibit an authentic generated origin.',
   'Infer a reliably known etymological Hanja spelling or borrowed Latin original only for the enabled origin type; NEVER substitute a meaning translation, invented spelling, or unrelated word.',
