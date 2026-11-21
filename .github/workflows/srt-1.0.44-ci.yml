@@ -36,7 +36,7 @@ jobs:
           find . -name '*.js' -not -path './runtime/*' -not -path './.github/*' -print0 | xargs -0 -n1 node --check
       - name: Test SRT compatibility and review logic
         run: |
-          node --test tests/*.test.mjs
+          timeout 55s node --test tests/*.test.mjs
           PYTHONPATH=python/browser-support python3 tests/test_dictionary_names.py
           PYTHONPATH=python/browser-support python3 tests/test_name_ambiguity.py
           PYTHONPATH=python/browser-support python3 tests/test_pos_coverage.py
