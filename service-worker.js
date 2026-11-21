@@ -425,7 +425,7 @@ async function clearAnnotationCache(){await loadCache();cache.clear();cacheLoade
 async function markCurrentProviderStreamUnstable(){return;}
 async function testApi(){
  const config=await getApiConfig();
- const target={target_id:'test-id',start:0,end:2,surface:'경제',context:'경제',options:[{choice_id:'KEEP',type:'keep',replacement:'경제',entry_id:null,definitions:[]}]};
+ const target={target_id:'test-id',start:0,end:2,surface:'경제',context:'경제',options:[{choice_id:null,type:'keep',replacement:'경제',entry_id:null,definitions:[]}]};
  const result=await reviewTargets({...config,enableModelReview:true},[target]);
  if(result.accepted.length!==1)throw Error(result.errors?.length ? result.errors.map(e=>`${e.message}: ${e.detail||''}`).join('\n') : 'API did not return a valid dictionary choice ID');
  return 'API ID protocol test succeeded.';

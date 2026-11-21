@@ -17,7 +17,7 @@ const reviewCopy={
  ko:['모든 후보를 모델로 검토 (기본 꺼짐)','로컬에서는 사전 검색과 위치 확인만 하며, 모든 한자어·외래어·혼종어 후보의 뜻을 모델이 선택하거나 한글로 유지합니다. 모델 검토가 자동 활성화되며 API 설정이 필요합니다. 사전이 없으면 실험적 어원 보완을 켜야 합니다. 유효한 답이 없거나 사전에 없는 단어는 한글로 유지합니다. 요청량·비용·대기 시간이 늘어날 수 있습니다. 새 작업부터 적용됩니다.']
 };
 const retryChoiceCopy={
- 'zh-CN':['有效答案立即应用，错误词典编号单独补交（默认开启）','保留并应用已经通过校验的词典选项；对于不存在的 c/n 编号自动整理仅含错误目标及其原有词典候选的补交请求。手动模式显示新提示词，API 模式自动重试；不重新审核已完成项目。实验性自由词源不参与此专项补交。'],
+ 'zh-CN':['有效答案立即应用，错误词典编号单独补交（默认开启）','只接受真实 JSON null、大小写不敏感的字符串 "null"、当前目标有效的 c/n 编号，以及经安全校验的实验性汉字/拉丁词源。模型返回其他无效选项、错误 p 编号或不合法自由词源时，保留已验证答案，只补交错误目标；手动显示纠错提示词，API 自动重试。与直接丢弃模式互斥，必须二选一。'],
  'zh-TW':['有效答案立即套用，錯誤詞典編號單獨補交（預設開啟）','保留已驗證的選項；不存在的 c/n 編號會生成只包含錯誤目標及原候選的新請求。手動顯示補交提示，API 自動重試；實驗性自填詞源不參與。'],
  en:['Apply valid answers; retry invalid dictionary IDs (on by default)','Commit validated choices immediately. Retry only invalid c/n dictionary IDs with the original options, without resending completed answers. Manual shows a correction prompt; API retries automatically. Experimental free-form origins are excluded.'],
  ja:['有効な回答を即時適用・誤った辞書番号のみ再照会（既定でオン）','検証済みの回答を保持して適用し、存在しない c/n 辞書番号のみ元の候補を使って再照会します。手動では補正プロンプトを表示、API では自動再試行します。実験的な自由入力の語源は対象外です。'],
@@ -25,7 +25,7 @@ const retryChoiceCopy={
 };
 for(const [locale,labels] of Object.entries(retryChoiceCopy))Object.assign(copy[locale],{retryInvalidDictionaryChoices:labels[0],retryInvalidDictionaryChoicesHint:labels[1]});
 const discardChoiceCopy={
- 'zh-CN':['直接丢弃非法结果，不重试（默认关闭）','保留并应用本批合法答案；无效选项、重复的格式合法答案、遗漏目标以及缺失或空白的 c 均按 JSON null 保留韩文；有且仅有一种完全相同的格式合法 t/c 答案时合并重复项并采用该答案；不同 c 的多条合法答案一律作废，不再请求补交。字符串 "null"/"NULL" 仍作为保留韩文处理。仅处理模型答案错误；网络故障仍遵循原有重试策略。与“错误词典编号单独补交”互斥。'],
+ 'zh-CN':['直接丢弃非法结果，不重试（默认关闭）','保留本批已验证的答案，所有非法选项、错误 p 编号、无法验证的开放词源、冲突重复、遗漏或空白回答均按 JSON null 保留韩文，不再请求模型补交。合法的 JSON null 与字符串 "null"/"NULL" 同样保留韩文。仅影响答案校验；网络故障仍按原重试策略。与“错误词典编号单独补交”必须二选一。'],
  'zh-TW':['直接捨棄無效結果，不再重試（預設關閉）','套用本批合法答案；無效選項、多條格式合法的重複答案、遺漏目標及缺少或空白的 c 均視為 JSON null，保留韓文；完全相同的格式合法 t/c 答案合併為一條；不同 c 的多條合法答案仍全部作廢。字串 "null"/"NULL" 仍保留韓文。網路故障仍依原有策略重試。與詞典編號補交互斥。'],
  en:['Discard invalid results without retrying (off by default)','Apply valid answers, keep one structurally valid answer despite malformed duplicates, and collapse exactly identical t/c copies; treat invalid choices, multiple well-formed duplicates, omitted targets and absent/blank c as JSON null (keep Korean), without correction requests. The strings "null"/"NULL" still mean keep Korean. Network failures retain their normal retry policy. Mutually exclusive with dictionary-choice retry.'],
  ja:['無効な結果を破棄し再試行しない（初期設定はオフ）','有効な回答だけ適用し、無効な選択、重複、欠落した回答や空の c はすべて JSON null として韓国語を保持します。"null"/"NULL" は韓国語のまま保持します。通信エラーの再試行は従来どおり。辞書番号の再照会と排他です。'],
@@ -153,28 +153,70 @@ const localAuditCopy={
 };
 for(const [locale,labels] of Object.entries(localAuditCopy))Object.assign(copy[locale],{reviewLocalConversions:labels[0],reviewLocalConversionsHint:labels[1]});
 const readingCopy={
- 'zh-CN':['汉字词源读音校验（默认开启）','对模型直接填写的汉字进行多读音与词首音变校验。关闭仅跳过读音比对；字形、词界、位置、人名保护仍然执行。不能证明词源正确。'],
- 'zh-TW':['漢字詞源讀音驗證（預設開啟）','檢查模型直接填寫漢字的多讀音與詞首音變。關閉只跳過讀音比對；字形、詞界、位置及姓名保護維持不變。不能證明語源正確。'],
- en:['Verify model Hanja readings (on by default)','Checks known multiple Sino-Korean readings and initial-sound alternations. Turning it off skips only reading comparison; script, position, boundary and name checks remain. Does not prove etymology.'],
- ja:['モデル漢字語源の読みを照合（既定でオン）','複数の音読みと頭音法則を確認します。オフにしても字形・境界・位置・人名保護は有効です。正しい語源の保証ではありません。'],
- ko:['모델 한자 어원 독음 검사 (기본 켜짐)','복수 한자 독음과 두음법칙을 검사합니다. 꺼도 문자·위치·어절 경계·인명 보호는 유지됩니다. 어원의 진위를 보장하지 않습니다.']
+ 'zh-CN':['模型直填汉字读音校验（默认关闭）','仅校验模型在实验性功能中直接填写的汉字词源的韩语读音与词首音变；词典提供的 c/n 选项不受此开关影响，也不会被该读音表再次否决。开启可能因多音字、数字后单位等情况误判；关闭仅跳过模型直填汉字的读音比对，字形、词界、位置、人名保护仍然执行。此校验不能证明词源正确。'],
+ 'zh-TW':['模型直填漢字讀音驗證（預設關閉）','僅驗證模型在實驗性功能中直接填寫之漢字詞源的韓語讀音及頭音法則；字典提供的 c/n 選項不受此開關影響，也不會被讀音表再次否決。開啟可能誤判多音字及數字後的單位；關閉僅略過模型直填漢字的讀音比對，字形、詞界、位置及人名保護仍然執行。此驗證無法證明詞源正確。'],
+ en:['Check model-written Hanja readings (off by default)','Applies Korean reading and initial-sound checks ONLY to Hanja spellings written directly by the model in experimental origin mode. Dictionary c/n choices are never rejected by this reading table. Enabling may falsely reject polyphonic Hanja or units after numbers. Turning off skips only this reading comparison; script, word boundaries, spans and personal-name safeguards remain. A match does not prove the etymology.'],
+ ja:['モデル直記漢字の読みを検証（初期設定はオフ）','実験的な語源補完でモデルが直接入力した漢字にだけ、韓国語の読みと頭音法則の照合を適用します。辞書の c/n 選択肢には適用せず、読み表を理由に拒否しません。有効時は多音字や数字に続く単位を誤判定する場合があります。オフでも字種・語境界・位置・人名保護は有効です。読みの照合だけでは語源の正しさは証明できません。'],
+ ko:['모델 직접 입력 한자 독음 검사 (기본 꺼짐)','실험적 어원 기능에서 모델이 직접 작성한 한자에만 한국어 독음과 두음법칙 검사를 적용합니다. 사전의 c/n 선택지는 이 검사로 다시 거부하지 않습니다. 켜면 다음자 및 숫자 뒤 단위를 오판할 수 있습니다. 꺼도 문자 유형, 단어 경계, 위치 및 인명 보호는 유지됩니다. 독음 검사가 어원 정확성을 증명하지는 않습니다.']
 };
 for(const [locale,labels] of Object.entries(readingCopy))Object.assign(copy[locale],{hanjaReadingCheck:labels[0],hanjaReadingCheckHint:labels[1]});
 for(const [locale,labels] of Object.entries({"en":{"switchHeading":"Dictionary / model review switches","resetSwitches":"Restore switch defaults","resetDone":"The dictionary/model switches were restored; profiles, batch size, keys and logs were preserved."},"zh-CN":{"switchHeading":"词典与模型审核选项","resetSwitches":"恢复这些选项的默认值","resetDone":"已恢复本框内选项；每批容量、模型配置、密钥、词典和日志均未更改。"},"zh-TW":{"switchHeading":"詞典與模型審核選項","resetSwitches":"還原這些選項的預設值","resetDone":"已還原此框的選項；批次容量、模型設定、密鑰、詞典及日誌均未變更。"},"ja":{"switchHeading":"辞書・モデル審査オプション","resetSwitches":"この項目の初期値に戻す","resetDone":"この枠内の設定のみ初期値に戻しました。バッチ容量やプロファイル・辞書・ログは変更していません。"},"ko":{"switchHeading":"사전 및 모델 검토 옵션","resetSwitches":"이 항목 기본값 복원","resetDone":"이 상자 안의 설정만 기본값으로 복원했습니다. 배치 용량·API 프로필·사전·로그는 유지합니다."}}))Object.assign(copy[locale],labels);
+for(const [locale,message] of Object.entries({
+ en:'Review strategy saved. Fix the output Token limit before saving other settings.',
+ 'zh-CN':'审核策略已单独保存。请修正输出 Token 限额后再保存其他设置。',
+ 'zh-TW':'審核策略已單獨儲存。請修正輸出 Token 上限後再儲存其他設定。',
+ ja:'審査方式は保存しました。ほかの設定を保存する前に出力 Token 上限を修正してください。',
+ ko:'검토 방식은 저장했습니다. 다른 설정을 저장하기 전에 출력 토큰 제한을 수정하세요.'
+}))copy[locale].reviewStrategySavedWithInvalidTokens=message;
 const t=key=>(copy[$('uiLocale').value]||copy.en)[key];
 function syncOutputInputs(){$('apiOutputTokenLimit').disabled=$('matchManualOutputBudget').checked;}
+// Model-written Hanja reading verification is subordinate to experimental Hanja.
+// Hiding it also clears any stale saved opt-in from this settings UI.
+function syncHanjaReadingCheckUI(){
+ const available=$('experimentalHanja').checked;
+ $('hanjaReadingCheckRow').hidden=!available;
+ $('hanjaReadingCheck').disabled=!available;
+ if(!available)$('hanjaReadingCheck').checked=false;
+}
 
 function translate(){for(const el of document.querySelectorAll('[data-engine-i18n]'))el.textContent=t(el.dataset.engineI18n);}
+// Synchronize the UI *before* any unrelated field can fail validation.
+// Old both-off settings become retry; old both-on settings prefer discard.
+function syncReviewStrategyUI(changed){
+ if(changed==='discardInvalidReviewResults')
+  $('retryInvalidDictionaryChoices').checked=!$('discardInvalidReviewResults').checked;
+ else if(changed==='retryInvalidDictionaryChoices')
+  $('discardInvalidReviewResults').checked=!$('retryInvalidDictionaryChoices').checked;
+ else if($('retryInvalidDictionaryChoices').checked===$('discardInvalidReviewResults').checked)
+  $('retryInvalidDictionaryChoices').checked=!$('discardInvalidReviewResults').checked;
+}
 async function save(changed){
+ syncReviewStrategyUI(changed);
+ if(['reviewAllCandidates','manualModelReview','experimentalHanja','experimentalLoanword','smartSegmentation'].includes(changed)&&$(changed).checked)$('enableModelReview').checked=true;
+ if(changed==='enableModelReview'&&!$('enableModelReview').checked){$('reviewAllCandidates').checked=false;$('manualModelReview').checked=false;$('experimentalHanja').checked=false;$('experimentalLoanword').checked=false;$('smartSegmentation').checked=false;}
+ syncHanjaReadingCheckUI();
  const apiLimit=Number($('apiOutputTokenLimit').value),manualLimit=Number($('manualOutputTokenLimit').value);
  if(!Number.isSafeInteger(apiLimit)||apiLimit<1024||apiLimit>1000000||
     !Number.isSafeInteger(manualLimit)||manualLimit<1024||manualLimit>1000000){
-  status.textContent=t('outputTokenLimitError');return;
+  // A review-mode change must not be blocked by an unrelated invalid token
+  // field: persist only the two switches, leaving other settings unchanged.
+  if(changed==='retryInvalidDictionaryChoices'||changed==='discardInvalidReviewResults'){
+   await chrome.storage.local.set({
+    retryInvalidDictionaryChoices:$('retryInvalidDictionaryChoices').checked,
+    discardInvalidReviewResults:$('discardInvalidReviewResults').checked
+   });
+   status.textContent=t('outputTokenLimitError')+'\n'+t('reviewStrategySavedWithInvalidTokens');
+  }else if(changed==='experimentalHanja'||changed==='hanjaReadingCheck'){
+   // Unrelated invalid token limits must not silently leave dependent switches stale.
+   await chrome.storage.local.set({
+    experimentalHanja:$('experimentalHanja').checked,
+    hanjaReadingCheck:$('hanjaReadingCheck').checked,
+    enableModelReview:$('enableModelReview').checked
+   });
+   status.textContent=t('outputTokenLimitError');
+  }else status.textContent=t('outputTokenLimitError');
+  return;
  }
- if(['reviewAllCandidates','manualModelReview','experimentalHanja','experimentalLoanword','smartSegmentation'].includes(changed)&&$(changed).checked)$('enableModelReview').checked=true;
- if(changed==='enableModelReview'&&!$('enableModelReview').checked){$('reviewAllCandidates').checked=false;$('manualModelReview').checked=false;$('experimentalHanja').checked=false;$('experimentalLoanword').checked=false;$('smartSegmentation').checked=false;}
- if(changed==='discardInvalidReviewResults'&&$('discardInvalidReviewResults').checked)$('retryInvalidDictionaryChoices').checked=false;
- if(changed==='retryInvalidDictionaryChoices'&&$('retryInvalidDictionaryChoices').checked)$('discardInvalidReviewResults').checked=false;
  syncOutputInputs();await chrome.storage.local.set({preloadEngineOnStartup:$('preloadEngineOnStartup').checked,reviewPosFilter:$('reviewPosFilter').checked,nameProtection:$('nameProtection').checked,filterDictionaryPeople:$('filterDictionaryPeople').checked,enableModelReview:$('enableModelReview').checked,reviewAllCandidates:$('reviewAllCandidates').checked,manualModelReview:$('manualModelReview').checked,reviewLocalConversions:$('reviewLocalConversions').checked,retryInvalidDictionaryChoices:$('retryInvalidDictionaryChoices').checked,discardInvalidReviewResults:$('discardInvalidReviewResults').checked,experimentalHanja:$('experimentalHanja').checked,experimentalLoanword:$('experimentalLoanword').checked,hanjaReadingCheck:$('hanjaReadingCheck').checked,smartSegmentation:$('smartSegmentation').checked,matchManualOutputBudget:$('matchManualOutputBudget').checked,batchContextTier:normalizeBatchContextTier($('batchContextTier').value),apiOutputTokenLimit:apiLimit,manualOutputTokenLimit:manualLimit});show({imported:importedDictionary});status.textContent=t('saved')+'\n'+status.textContent;
 }
 const dictionaryLabels={en:['Dictionary imported','Dictionary not imported'],'zh-CN':['词典已导入','词典未导入，请选择 ZIP 或 DB 文件。'],'zh-TW':['詞典已匯入','詞典未匯入，請選擇 ZIP 或 DB 檔案。'],ja:['辞書を取り込み済み','辞書は未取り込みです。JSON ZIP を選択してください。'],ko:['사전 가져오기 완료','사전이 없습니다. JSON ZIP을 가져오세요.']};
@@ -197,9 +239,10 @@ $('resetEngineSwitches').addEventListener('click',async()=>{
  try{
   await chrome.storage.local.set({...ENGINE_SWITCH_DEFAULTS});
   for(const [key,value] of Object.entries(ENGINE_SWITCH_DEFAULTS))$(key).checked=value;
+  syncHanjaReadingCheckUI();
   show({imported:importedDictionary});
   status.textContent=t('resetDone')+'\n'+status.textContent;
  }catch(e){status.textContent=e.message;}finally{button.disabled=false;}
 });
 $('uiLocale').addEventListener('change',()=>{translate();show({imported:importedDictionary});});
-chrome.storage.local.get(['enableModelReview','reviewAllCandidates','manualModelReview','experimentalHanja','experimentalLoanword','hanjaReadingCheck','smartSegmentation','matchManualOutputBudget','reviewLocalConversions','retryInvalidDictionaryChoices','discardInvalidReviewResults','batchContextTier','apiOutputTokenLimit','manualOutputTokenLimit','nameProtection','filterDictionaryPeople','reviewPosFilter','preloadEngineOnStartup','uiSettings']).then(async s=>{const defaults=engineSwitchValues(s);$('preloadEngineOnStartup').checked=defaults.preloadEngineOnStartup;$('reviewPosFilter').checked=defaults.reviewPosFilter;$('nameProtection').checked=defaults.nameProtection;$('filterDictionaryPeople').checked=defaults.filterDictionaryPeople;$('reviewAllCandidates').checked=defaults.reviewAllCandidates;$('manualModelReview').checked=defaults.manualModelReview;$('reviewLocalConversions').checked=defaults.reviewLocalConversions;$('retryInvalidDictionaryChoices').checked=defaults.retryInvalidDictionaryChoices;$('discardInvalidReviewResults').checked=defaults.discardInvalidReviewResults;$('experimentalHanja').checked=defaults.experimentalHanja;$('experimentalLoanword').checked=defaults.experimentalLoanword;$('hanjaReadingCheck').checked=defaults.hanjaReadingCheck;$('smartSegmentation').checked=defaults.smartSegmentation;$('matchManualOutputBudget').checked=s.matchManualOutputBudget!==false;$('batchContextTier').value=normalizeBatchContextTier(s.batchContextTier);$('apiOutputTokenLimit').value=Number.isSafeInteger(s.apiOutputTokenLimit)&&s.apiOutputTokenLimit>=1024&&s.apiOutputTokenLimit<=1000000?s.apiOutputTokenLimit:16384;$('manualOutputTokenLimit').value=Number.isSafeInteger(s.manualOutputTokenLimit)&&s.manualOutputTokenLimit>=1024&&s.manualOutputTokenLimit<=1000000?s.manualOutputTokenLimit:65536;$('enableModelReview').checked=defaults.enableModelReview||defaults.reviewAllCandidates||defaults.manualModelReview||defaults.experimentalHanja||defaults.experimentalLoanword||defaults.smartSegmentation;if(s.enableModelReview===undefined)await chrome.storage.local.set({preloadEngineOnStartup:$('preloadEngineOnStartup').checked,reviewPosFilter:$('reviewPosFilter').checked,nameProtection:$('nameProtection').checked,enableModelReview:$('enableModelReview').checked});if(s.uiSettings?.uiLocale)$('uiLocale').value=s.uiSettings.uiLocale;syncOutputInputs();translate();await refreshDictionaryStatus();}).catch(e=>status.textContent=e.message);translate();
+chrome.storage.local.get(['enableModelReview','reviewAllCandidates','manualModelReview','experimentalHanja','experimentalLoanword','hanjaReadingCheck','smartSegmentation','matchManualOutputBudget','reviewLocalConversions','retryInvalidDictionaryChoices','discardInvalidReviewResults','batchContextTier','apiOutputTokenLimit','manualOutputTokenLimit','nameProtection','filterDictionaryPeople','reviewPosFilter','preloadEngineOnStartup','uiSettings']).then(async s=>{const defaults=engineSwitchValues(s);$('preloadEngineOnStartup').checked=defaults.preloadEngineOnStartup;$('reviewPosFilter').checked=defaults.reviewPosFilter;$('nameProtection').checked=defaults.nameProtection;$('filterDictionaryPeople').checked=defaults.filterDictionaryPeople;$('reviewAllCandidates').checked=defaults.reviewAllCandidates;$('manualModelReview').checked=defaults.manualModelReview;$('reviewLocalConversions').checked=defaults.reviewLocalConversions;$('retryInvalidDictionaryChoices').checked=defaults.retryInvalidDictionaryChoices;$('discardInvalidReviewResults').checked=defaults.discardInvalidReviewResults;$('experimentalHanja').checked=defaults.experimentalHanja;$('experimentalLoanword').checked=defaults.experimentalLoanword;$('hanjaReadingCheck').checked=defaults.hanjaReadingCheck;syncHanjaReadingCheckUI();$('smartSegmentation').checked=defaults.smartSegmentation;$('matchManualOutputBudget').checked=s.matchManualOutputBudget!==false;$('batchContextTier').value=normalizeBatchContextTier(s.batchContextTier);$('apiOutputTokenLimit').value=Number.isSafeInteger(s.apiOutputTokenLimit)&&s.apiOutputTokenLimit>=1024&&s.apiOutputTokenLimit<=1000000?s.apiOutputTokenLimit:16384;$('manualOutputTokenLimit').value=Number.isSafeInteger(s.manualOutputTokenLimit)&&s.manualOutputTokenLimit>=1024&&s.manualOutputTokenLimit<=1000000?s.manualOutputTokenLimit:65536;$('enableModelReview').checked=defaults.enableModelReview||defaults.reviewAllCandidates||defaults.manualModelReview||defaults.experimentalHanja||defaults.experimentalLoanword||defaults.smartSegmentation;if(s.enableModelReview===undefined)await chrome.storage.local.set({preloadEngineOnStartup:$('preloadEngineOnStartup').checked,reviewPosFilter:$('reviewPosFilter').checked,nameProtection:$('nameProtection').checked,enableModelReview:$('enableModelReview').checked});if(s.uiSettings?.uiLocale)$('uiLocale').value=s.uiSettings.uiLocale;syncOutputInputs();translate();await refreshDictionaryStatus();}).catch(e=>status.textContent=e.message);translate();

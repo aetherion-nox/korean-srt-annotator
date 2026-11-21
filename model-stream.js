@@ -39,12 +39,11 @@ export function choicePreviewParser(targets,onPreview,resolveExtra=()=>null,conf
    const selected=row.c===null?null:target?.options.find(o=>o.type!=='keep'&&(
      o.choice_id===row.c||(target.dictionary_person_name===true&&
        target.verified_person_hanja?.includes(row.c)&&o.type==='hanja'&&o.replacement===row.c)));
-   // Match final validation: unknown c/n indexes are null (keep Korean).
-   const keep=row.c===null||typeof row.c==='string'&&row.c.toLowerCase()==='null'||
-      (config.discardInvalidReviewResults!==true&&!selected&&typeof row.c==='string'&&/^[cn]\d+$/u.test(row.c));
-   const option=(keep?target?.options.find(o=>o.type==='keep'):null)||
-     selected||resolveExtra(target,row.c)||
-      (config.discardInvalidReviewResults===true?null:target?.options.find(o=>o.type==='keep'));
+   // A preview must not fabricate a KEEP decision from a malformed or
+   // unrecognized c field: the final validator will retry it in strict mode.
+   const explicitNull=row.c===null||typeof row.c==='string'&&row.c.toLowerCase()==='null';
+   const option=(explicitNull?target?.options.find(o=>o.type==='keep'):null)||
+     selected||resolveExtra(target,row.c)||null;
    // Preview and final application must agree; an invalid origin is a
    // no-conversion result, never a speculative annotation.
    return option?[{target,option}]:[];

@@ -1,10 +1,9 @@
 import {filterReviewTarget,filterReviewTargets} from './review-pos.js';
-import {readingCompatibleModelChoice} from './review-reading-safety.js';
 import {qwenRequestSettings} from './qwen-api.js';
 import {readModelContent,choicePreviewParser,experimentalChoicePreviewParser} from './model-stream.js';
 import {requestLogger} from './request-log.js';
 import './model-catalog.js';
-import {buildReviewPayload,buildReviewInstructions} from './review-payload.js';
+import {buildReviewPayload,buildReviewInstructions,normalizePooledChoiceAnswers} from './review-payload.js';
 import {literalOriginOption,explainLiteralOriginRejection} from './experimental-options.js';
 import {summarizeExperimentalHanjaAnswers} from './experimental-hanja-diagnostics.js';
 import {validateSegmentationRepairs} from './segmentation-repairs.js';
@@ -12,43 +11,31 @@ import {normalizeOutputTokenLimit,describeBatchBudget} from './batch-budget.js';
 import {requestTimeoutGuard} from './request-timeout.js';
 import {parsePartialReviewJson} from './partial-review-json.js';
 // Response rows have one wire format only: {t, c}. The special null
-// c means keep the source. A string "KEEP" is NOT a fallback marker.
+// c means keep the source. The Latin string "KEEP" is never a fallback marker; null alone means no conversion.
 function validWireRow(row,known){
  return row&&typeof row==='object'&&!Array.isArray(row)&&
   Object.keys(row).sort().join(',')==='c,t'&&
   typeof row.t==='string'&&known.has(row.t)&&
   (row.c===null||(typeof row.c==='string'&&row.c.trim().length>0));
 }
+export function explicitNullChoice(value){
+ return value===null||(typeof value==='string'&&value.toLowerCase()==='null');
+}
 function matchedWireOption(target,value,config){
  const options=filterReviewTarget(target,config).options;
- if(value===null||typeof value==='string'&&value.toLowerCase()==='null')return options.find(o=>o.type==='keep')||null;
+ if(explicitNullChoice(value))return options.find(o=>o.type==='keep')||null;
  const selected=options.find(o=>o.type!=='keep'&&o.choice_id===value);
- // A literal Hanja personal name is permitted ONLY when the local dictionary
- // supplied that exact writing for this full occurrence. Treat it as the
- // original dictionary sense, not as an unverified experimental guess.
  if(!selected&&typeof value==='string'&&target.dictionary_person_name===true&&
     target.verified_person_hanja?.includes(value)){
   const matched=options.find(o=>o.type==='hanja'&&o.replacement===value&&o.entry_id!=null);
-  if(matched&&readingCompatibleModelChoice(target,matched,config))return matched;
+  if(matched)return matched;
  }
- // A nonexistent numbered dictionary option means no conversion, in both
- // ordinary and experimental modes. Authentic literal origins remain distinct.
- if(selected)return readingCompatibleModelChoice(target,selected,config)?selected:
-  options.find(o=>o.type==='keep')||null;
- if(typeof value==='string'&&/^[cn]\d+$/u.test(value)){
-  const hasDictionary=options.some(o=>o.type!=='keep');
-  if(config.discardInvalidReviewResults===true||config.retryInvalidDictionaryChoices!==false&&hasDictionary)return null;
-  return options.find(o=>o.type==='keep')||null;
- }
- return null;
-}
-// Only numbered c/n dictionary IDs are automatically corrected. Free-form
-// experimental origins retain their existing independent safety fallback.
-function wrongDictionaryId(target,value,config){
- return config.discardInvalidReviewResults!==true&&config.retryInvalidDictionaryChoices!==false&&typeof value==='string'&&
-  /^[cn]\d+$/u.test(value)&&
-  filterReviewTarget(target,config).options.some(o=>o.type!=='keep')&&
-  !filterReviewTarget(target,config).options.some(o=>o.type!=='keep'&&o.choice_id===value);
+ // A real, target-specific dictionary choice is independently valid as an
+ // option ID. The optional Hanja reading checker is ONLY for model-written
+ // experimental spellings, not dictionary-backed c/n selections.
+ // Meaning, named-entity and word boundaries are still checked by the model
+ // and the existing review/option safety filters.
+ return selected||null;
 }
 // Only structurally valid t/c rows participate in duplicate detection.
 // Missing/malformed-only targets keep Korean in discard mode.
@@ -72,8 +59,6 @@ function groupedRows(targets,response,config){
  if((!response||!Array.isArray(response.results))&&config.discardInvalidReviewResults===true)
   return result;
  if(!response||!Array.isArray(response.results)||Object.hasOwn(response,'experimental_options'))
-  return null;
- if(config.discardInvalidReviewResults!==true&&config.retryInvalidDictionaryChoices===false&&rows.some(row=>!validWireRow(row,new Set(known.keys()))))
   return null;
  // Filter malformed rows first. Exact repeated t/c values count as one;
  // conflicting c values for a known t invalidate the target.
@@ -99,14 +84,11 @@ export function validateChoices(targets,response,config={}){
    continue;
   }
   const value=rows[0].c;
-  if(wrongDictionaryId(target,value,config)){
-   unresolved.push(target);invalidDictionaryChoiceIds.push(target.target_id);continue;
-  }
-  const selected=matchedWireOption(target,value,config);
-   const option=selected||(config.discardInvalidReviewResults===true?null:target.options.find(o=>o.type==='keep'));
-  if(!option){const dropped=discardedChoice(target,config);if(dropped)accepted.push(dropped);else unresolved.push(target);continue;}
-  const invalidChoiceFallback=value!==null&&option.type==='keep';
-  accepted.push(invalidChoiceFallback?{target,option,invalidChoiceFallback:true}:{target,option});
+  const option=matchedWireOption(target,value,config);
+  if(option){accepted.push({target,option});continue;}
+  const dropped=discardedChoice(target,config);
+  if(dropped)accepted.push(dropped);
+  else {unresolved.push(target);invalidDictionaryChoiceIds.push(target.target_id);}
  }
  return {accepted,unresolved,invalidDictionaryChoiceIds};
 }
@@ -126,22 +108,17 @@ export function validateExperimentalChoices(targets,response,config={}){
    continue;
   }
   const id=rows[0].c;
-  if(wrongDictionaryId(target,id,config)){
-   unresolved.push(target);invalidDictionaryChoiceIds.push(target.target_id);continue;
-  }
   const option=matchedWireOption(target,id,config);
   if(option){accepted.push({target,option});continue;}
   const generated=literalOriginOption(target,id,config);
-  if(generated){accepted.push({target,option:generated});experimentalAccepted++;}
-  else{
-   if(config.discardInvalidReviewResults===true){const dropped=discardedChoice(target,config);if(dropped)accepted.push(dropped);else unresolved.push(target);experimentalRejected++;continue;}
-   const keep=target.options.find(o=>o.type==='keep');
-   if(keep)accepted.push({target,option:keep});else unresolved.push(target);
-   experimentalRejected++;
-   const reason=explainLiteralOriginRejection(target,id,config);
-   rejectionCounts[reason]=(rejectionCounts[reason]||0)+1;
-   if(rejectionSamples.length<16)rejectionSamples.push({target_id:target.target_id,surface:target.surface,c:id,reason});
-  }
+  if(generated){accepted.push({target,option:generated});experimentalAccepted++;continue;}
+  const dropped=discardedChoice(target,config);
+  if(dropped)accepted.push(dropped);
+  else {unresolved.push(target);invalidDictionaryChoiceIds.push(target.target_id);}
+  experimentalRejected++;
+  const reason=explainLiteralOriginRejection(target,id,config);
+  rejectionCounts[reason]=(rejectionCounts[reason]||0)+1;
+  if(rejectionSamples.length<16)rejectionSamples.push({target_id:target.target_id,surface:target.surface,c:id,reason});
  }
  return {accepted,unresolved,invalidDictionaryChoiceIds,
   experimentalAccepted,experimentalProposed:experimentalAccepted,experimentalRejected,rejectionCounts,rejectionSamples};
@@ -202,7 +179,7 @@ export async function reviewTargets(config,targets,signal){
  let windowSize=targets.length,failStreak=0;
  for(let attempt=0;attempt<maxRequests && pending.length;attempt++){
   signal?.throwIfAborted();
-  const dictionaryOnly=!discardInvalid&&!manual&&config.retryInvalidDictionaryChoices!==false&&
+  const dictionaryOnly=!discardInvalid&&!manual&&
     pending.some(t=>correctionIds.has(t.target_id));
   const current=dictionaryOnly?pending.filter(t=>correctionIds.has(t.target_id)):
     manual||smart?pending:pending.slice(0,windowSize);
@@ -216,7 +193,12 @@ export async function reviewTargets(config,targets,signal){
   try {
    const wire=modelTargets(current,attemptConfig);
    config.onReviewTargetsSubmitted?.(wire,attempt+1);
-   const response=await (config.request || requestChoices)({...attemptConfig,attempt:attempt+1},wire,signal);
+   const rawResponse=await (config.request || requestChoices)({...attemptConfig,attempt:attempt+1},wire,signal);
+   // Resolve a p key only through one matching c/n key of this target in the
+   // exact outgoing payload. All ambiguous/missing p IDs remain illegal.
+   const response=Array.isArray(rawResponse?.results)&&rawResponse.results.some(r=>
+     typeof r?.c==='string'&&/^p\d+$/u.test(r.c))?
+    normalizePooledChoiceAnswers(rawResponse,buildReviewPayload(attemptConfig.context||'',wire,attemptConfig).payload):rawResponse;
    const experimental=attemptConfig.experimentalHanja===true||attemptConfig.experimentalLoanword===true;
    // Manual replies are audited at entry, before invalid rows are normalized.
    if(!manual&&attemptConfig.experimentalHanja===true)
@@ -230,7 +212,7 @@ export async function reviewTargets(config,targets,signal){
    const active=attemptConfig.smartSegmentation===true?
      current.filter(t=>!t.scan_only&&!retired.has(t.target_id)):current;
    const known=new Set(current.map(t=>t.target_id));
-   const badId=attemptConfig.smartSegmentation===true&&attemptConfig.retryInvalidDictionaryChoices===false&&attemptConfig.discardInvalidReviewResults!==true&&
+   const badId=attemptConfig.smartSegmentation===true&&attemptConfig.discardInvalidReviewResults!==true&&
      (!Array.isArray(response?.results)||response.results.some(row=>
        !row||typeof row.t!=='string'||!known.has(row.t)));
    const choiceResponse=attemptConfig.smartSegmentation===true&&!badId&&Array.isArray(response?.results)?
@@ -263,7 +245,7 @@ export async function reviewTargets(config,targets,signal){
    config.onPreview?.([]);
    if(experimental)notify({stage:'experimental',level:result.experimentalRejected?'warning':'info',message:`单次回复：直接词源标注 ${result.experimentalAccepted} 项、拒绝无效直接词源 ${result.experimentalRejected} 项。`,detail:result.experimentalRejected?JSON.stringify({reasons:result.rejectionCounts,samples:result.rejectionSamples}):''});
    if(!discardInvalid&&result.invalidDictionaryChoiceIds?.length)notify({stage:'retry-dictionary-choice',level:'warning',attempt:attempt+1,
-    message:`发现 ${result.invalidDictionaryChoiceIds.length} 个不存在的词典选项编号，已保存有效答案；仅对这些目标生成下一次纠错请求。`,
+    message:`发现 ${result.invalidDictionaryChoiceIds.length} 个非法选项或未通过校验的词源，已保存有效答案；仅对这些目标生成下一次纠错请求。`,
     detail:result.invalidDictionaryChoiceIds.slice(0,20).join(', ')});
    const implicitCount=result.accepted.filter(a=>a.implicitNull).length;
    const discardedCount=result.accepted.filter(a=>a.discardedInvalid).length;

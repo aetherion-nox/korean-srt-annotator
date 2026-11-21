@@ -7,7 +7,7 @@ export const ENGINE_SWITCH_DEFAULTS=Object.freeze({
  filterDictionaryPeople:true,
  reviewPosFilter:true,
  experimentalHanja:true,
- hanjaReadingCheck:true,
+ hanjaReadingCheck:false,
  experimentalLoanword:true,
  smartSegmentation:true,
  reviewLocalConversions:true,
@@ -25,7 +25,11 @@ export function engineSwitchValues(saved={}){
  const reviewDependent=new Set(['manualModelReview','experimentalHanja','experimentalLoanword','smartSegmentation']);
  const values=Object.fromEntries(Object.entries(ENGINE_SWITCH_DEFAULTS).map(([key,fallback])=>
   [key,typeof saved[key]==='boolean'?saved[key]:priorReviewOff&&reviewDependent.has(key)?false:fallback]));
- // Discard mode takes precedence if both flags were saved by an old or external client.
+ // These are exhaustive, mutually exclusive invalid-answer strategies.
+ // Legacy profiles with neither enabled are migrated to strict retry instead
+ // of silently turning arbitrary invalid c values into null.
  if(values.discardInvalidReviewResults)values.retryInvalidDictionaryChoices=false;
+ else values.retryInvalidDictionaryChoices=true;
+ if(!values.experimentalHanja)values.hanjaReadingCheck=false;
  return values;
 }

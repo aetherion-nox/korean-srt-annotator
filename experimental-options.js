@@ -90,7 +90,7 @@ export function literalOriginOption(target,choiceId,config={}){
  try{
   const projected=projectAnnotation(target.context,{...target,...option});
   if(!projected.length||projected.some(a=>a.start<target.start||a.end>target.end))return null;
-  if(type==='hanja'&&config.hanjaReadingCheck!==false&&validateModelHanjaReadings(target.context,projected).status==='mismatch')return null;
+  if(type==='hanja'&&config.hanjaReadingCheck===true&&validateModelHanjaReadings(target.context,projected).status==='mismatch')return null;
  }catch{return null;}
  return option;
 }
@@ -115,7 +115,7 @@ export function explainLiteralOriginRejection(target,choiceId,config={}){
   return kind==='hanja'?'person_name_hanja_blocked':'source_boundary_or_name_blocked';
  }
  if(kind==='hanja'){
-  if(config.hanjaReadingCheck!==false&&literalOriginOption(target,choiceId,{...config,hanjaReadingCheck:false}))
+  if(config.hanjaReadingCheck===true&&literalOriginOption(target,choiceId,{...config,hanjaReadingCheck:false}))
    return 'hanja_reading_conflict';
   return 'hanja_alignment_or_boundary';
  }

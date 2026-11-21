@@ -221,7 +221,7 @@ export async function runSentencePipeline(message,post,{signal,analyze=analyzeLo
     (message.restrictToSelection!==true||sentence.selected?.some(r=>r.start<r.end))){
    const scan={target_id:'scan-only',start:0,end:sentence.text.length,
     surface:sentence.text,context:sentence.text,scan_only:true,
-    options:[{choice_id:'KEEP',type:'keep',replacement:sentence.text,entry_id:null,definitions:[]}]};
+    options:[{choice_id:null,type:'keep',replacement:sentence.text,entry_id:null,definitions:[]}]};
    analysis={...analysis,targets:[scan]};
   }
   if(smartSegmentation)analysis={...analysis,targets:analysis.targets.map(t=>({...t,repair_sentence_key:sentence.id,
@@ -266,7 +266,7 @@ export async function runSentencePipeline(message,post,{signal,analyze=analyzeLo
  if(config){const upstreamDiagnostic=config.onDiagnostic;config={...config,onDiagnostic:d=>{upstreamDiagnostic?.(d);diagnostic({...d,message:safeDetail(d.message,config),detail:safeDetail(d.detail,config)});}};}
 
  const experimental=!!(config?.experimentalHanja&&modes.hanja||config?.experimentalLoanword&&modes.loanword);
- if(config)config={...config,smartSegmentation:smartSegmentation&&config.smartSegmentation===true,experimentalHanja:experimental&&config.experimentalHanja===true&&modes.hanja,experimentalLoanword:experimental&&config.experimentalLoanword===true&&modes.loanword,hanjaReadingCheck:config.hanjaReadingCheck!==false,dictionaryFree,repairModes:{hanja:modes.hanja,loanword:modes.loanword}};
+ if(config)config={...config,smartSegmentation:smartSegmentation&&config.smartSegmentation===true,experimentalHanja:experimental&&config.experimentalHanja===true&&modes.hanja,experimentalLoanword:experimental&&config.experimentalLoanword===true&&modes.loanword,hanjaReadingCheck:config.hanjaReadingCheck===true,dictionaryFree,repairModes:{hanja:modes.hanja,loanword:modes.loanword}};
  const progressive=message.progressiveAnnotation===true;
  const lastPublished=new Map();
  const publishModel=(item,preview=[],provisional=false)=>{
@@ -287,7 +287,7 @@ export async function runSentencePipeline(message,post,{signal,analyze=analyzeLo
  const reportProgress=()=>emit('MODEL_PROGRESS',{...progress,modelPercent:progress.modelTotal?Math.round(100*progress.modelCompleted/progress.modelTotal):100});
  for(const item of work){
   const {analysis,localKey}=item;
-  // Do not ask an ordinary (non-experimental) model to choose among KEEP
+  // Do not ask an ordinary (non-experimental) model to choose among null/no-conversion
   // and only native/nonconversion senses. Such targets cannot annotate
   // anything; they sometimes survive as original homograph review targets.
   // Smart segmentation keeps all its placeholders for repair, and explicitly
@@ -298,7 +298,7 @@ export async function runSentencePipeline(message,post,{signal,analyze=analyzeLo
    analysis.targets;
   item.result={accepted:[],unresolved:item.reviewableTargets};
   if(config && item.reviewableTargets.length){
-   const fingerprint=JSON.stringify([config.hanjaReadingCheck!==false,smartSegmentation?'id-review-v21-single-pass-segmentation-repair':experimental?'id-review-v20-literal-origin-choice':'id-review-v17-chunk-context',config.endpoint,config.model,config.provider,config.reviewPosFilter!==false,config.retryInvalidDictionaryChoices!==false,config.discardInvalidReviewResults===true,!!config.disableThinking,config.reasoningEffort,...(experimental?[!!config.experimentalHanja,!!config.experimentalLoanword]:[])]);
+   const fingerprint=JSON.stringify([config.hanjaReadingCheck===true,smartSegmentation?'id-review-v21-single-pass-segmentation-repair':experimental?'id-review-v20-literal-origin-choice':'id-review-v17-chunk-context',config.endpoint,config.model,config.provider,config.reviewPosFilter!==false,config.retryInvalidDictionaryChoices!==false,config.discardInvalidReviewResults===true,!!config.disableThinking,config.reasoningEffort,...(experimental?[!!config.experimentalHanja,!!config.experimentalLoanword]:[])]);
    item.reviewFingerprint=fingerprint;
    item.reviewKey=JSON.stringify([localKey,fingerprint,compactReviewTargets(analysis.targets),context]);
    const cached=!item.sessionHanjaUsed&&!experimental&&!smartSegmentation&&!bypassCache&&!config.manualReview&&cache.get(item.reviewKey);
@@ -484,7 +484,7 @@ export async function runSentencePipeline(message,post,{signal,analyze=analyzeLo
    else await publishModel(item);
   }
  }
- // KEEP / valid nonconversion selections are intentionally not conversions;
+ // Null / valid nonconversion selections are intentionally not conversions;
  // only missing model answers mean that analysis has NOT fully completed.
  stats.model_unanswered=enabled?work.reduce((n,item)=>{
   const retired=new Set((item.repairs||[]).flatMap(r=>r.source_target_ids));

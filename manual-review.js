@@ -1,4 +1,4 @@
-import {buildManualPrompt,buildReviewInstructions} from './review-payload.js';
+import {buildManualPrompt,buildReviewInstructions,normalizePooledChoiceAnswers,poolPayloadFromManualPrompt} from './review-payload.js';
 export {buildManualPrompt} from './review-payload.js';
 import {validateChoices,validateExperimentalChoices} from './choice-review.js';
 import {filterReviewTarget} from './review-pos.js';
@@ -54,7 +54,7 @@ export function prepareManualRequest(config,targets){
    dictionary_person_name:t.dictionary_person_name===true,dictionary_name_homograph:t.dictionary_name_homograph===true
   })),scopes:[...scopes]};
  })():undefined;
- return {requestId,bindings,repairValidation,retryInvalidDictionaryChoices:config.retryInvalidDictionaryChoices!==false&&config.discardInvalidReviewResults!==true,discardInvalidReviewResults:config.discardInvalidReviewResults===true,smartSegmentation:config.smartSegmentation===true,hanjaReadingCheck:config.hanjaReadingCheck===true,batchNumber:config.batchNumber,batchTotal:config.batchTotal,targetCount:wireTargets.filter(t=>!(config.smartSegmentation===true&&t.scan_only===true)).length,text:buildManualPrompt(config.context,wireTargets,requestId,config),budget:{...describeBatchBudget(config.context,wireTargets,{tier:config.batchContextTier,manual:true,wireIds:true,batchId:requestId,reviewPosFilter:config.reviewPosFilter,experimentalHanja:config.experimentalHanja,experimentalLoanword:config.experimentalLoanword,dictionaryFree:config.dictionaryFree,smartSegmentation:config.smartSegmentation,manualOutputTokenLimit:config.manualOutputTokenLimit,apiOutputTokenLimit:config.apiOutputTokenLimit}),limitReason:config.batchBudget?.limitReason}};
+ return {requestId,bindings,repairValidation,retryInvalidDictionaryChoices:config.discardInvalidReviewResults!==true,discardInvalidReviewResults:config.discardInvalidReviewResults===true,smartSegmentation:config.smartSegmentation===true,hanjaReadingCheck:config.hanjaReadingCheck===true,batchNumber:config.batchNumber,batchTotal:config.batchTotal,targetCount:wireTargets.filter(t=>!(config.smartSegmentation===true&&t.scan_only===true)).length,text:buildManualPrompt(config.context,wireTargets,requestId,config),budget:{...describeBatchBudget(config.context,wireTargets,{tier:config.batchContextTier,manual:true,wireIds:true,batchId:requestId,reviewPosFilter:config.reviewPosFilter,experimentalHanja:config.experimentalHanja,experimentalLoanword:config.experimentalLoanword,dictionaryFree:config.dictionaryFree,smartSegmentation:config.smartSegmentation,manualOutputTokenLimit:config.manualOutputTokenLimit,apiOutputTokenLimit:config.apiOutputTokenLimit}),limitReason:config.batchBudget?.limitReason}};
 }
 
 // Preserve the original shared pools and restrict retry work to unsolved IDs.
@@ -86,7 +86,7 @@ function manualRetryPrompt(original,batchId,remaining,reasons,acceptedCount){
      experimentalHanja:originTypes.includes('hanja'),
      experimentalLoanword:originTypes.includes('loanword'),
      dictionaryFree:old.null_is_fallback_only===true,
-     referenceSubtitle:(old.sentences||[]).some(s=>!!s.reference_context)});
+      referenceSubtitle:(old.sentences||[]).some(s=>!!s.reference_context)});
    return lead+rules+'\n'+JSON.stringify(payload);
  }catch{return lead+original;}
 }
@@ -106,7 +106,7 @@ export function createManualReviewSession({operationId,post,signal}={}){
     pending={requestId,targets,wireTargets,originalPrompt:prepared.text,acceptedRows:new Map(),savedRepairs:[],
       experimentalHanja:config.experimentalHanja===true,experimentalLoanword:config.experimentalLoanword===true,hanjaReadingCheck:config.hanjaReadingCheck===true,
       onExperimentalHanjaAnswers:config.onExperimentalHanjaAnswers,
-      reviewPosFilter:config.reviewPosFilter,retryInvalidDictionaryChoices:config.retryInvalidDictionaryChoices!==false&&config.discardInvalidReviewResults!==true,discardInvalidReviewResults:config.discardInvalidReviewResults===true,smartSegmentation:config.smartSegmentation===true,
+      reviewPosFilter:config.reviewPosFilter,retryInvalidDictionaryChoices:config.discardInvalidReviewResults!==true,discardInvalidReviewResults:config.discardInvalidReviewResults===true,smartSegmentation:config.smartSegmentation===true,
       repairContext:config.context,repairModes:config.repairModes,
       repairScopes:new Map(targets.map((target,i)=>[wireTargets[i].target_id,config.repairScopes?.get(target.target_id)])),
       resolve:response=>{clear();resolve(response);}};
@@ -142,10 +142,14 @@ export function createManualReviewSession({operationId,post,signal}={}){
         {results:[]};
       if(!Object.hasOwn(parsed,'batch_id'))parsed.batch_id=current.requestId;
     }
-    const response=normalizeManualAnswer(parsed,{
+    const normalized=normalizeManualAnswer(parsed,{
       requestId:current.requestId,knownTargetIds:currentIds,
       discardInvalidReviewResults:current.discardInvalidReviewResults
     });
+    // Only an unambiguous p reference *in this original manual request*
+    // can be converted to a local c/n ID. Other p values are invalid.
+    const response=normalized.results.some(row=>typeof row?.c==='string'&&/^p\d+$/u.test(row.c))?
+      normalizePooledChoiceAnswers(normalized,poolPayloadFromManualPrompt(current.originalPrompt)):normalized;
     if(Object.prototype.hasOwnProperty.call(response,'experimental_options')){
       if(current.discardInvalidReviewResults)delete response.experimental_options;
       else throw Error('新版协议只需要 results；请不要包含 experimental_options。');
@@ -228,7 +232,7 @@ export function createManualReviewSession({operationId,post,signal}={}){
         validateChoices([target],{results:[row]},choicesConfig);
       if(selected.accepted.length!==1){
         const candidate=filterReviewTarget(target,choicesConfig).options.find(o=>o.type!=='keep'&&o.choice_id===row.c);
-        reasons.set(id,candidate?'字段不符合当前协议':'无效 c：'+String(row.c??'(null)')+
+        reasons.set(id,candidate?'所选义项未通过校验':'无效 c：'+String(row.c??'(null)')+
           '；原因 '+explainLiteralOriginRejection(target,row.c,choicesConfig));continue;
       }
       const selectedOption=selected.accepted[0].option;
@@ -236,13 +240,8 @@ export function createManualReviewSession({operationId,post,signal}={}){
       current.acceptedRows.set(id,{t:id,c:selectedOption.type==='keep'?null:selectedOption.choice_id});
     }
     const required=current.wireTargets.filter(t=>!(current.smartSegmentation&&t.scan_only===true));
-    // A dictionary-free experimental target has no c/n option to correct.
-    // Do not re-ask those targets as part of this targeted correction feature.
-    if(current.retryInvalidDictionaryChoices)for(const target of required){
-      if(current.acceptedRows.has(target.target_id)||retired.has(target.target_id))continue;
-      if(!filterReviewTarget(target,choicesConfig).options.some(o=>o.type!=='keep'))
-        current.acceptedRows.set(target.target_id,{t:target.target_id,c:null});
-    }
+    // A dictionary-free target with an invalid answer remains unresolved
+    // in strict mode. Even here, only explicit null can choose KEEP.
     // In discard mode, omitted or unusable entries map to c:null; among
     // repeated entries only the structurally valid rows are counted.
     if(current.discardInvalidReviewResults)for(const target of required){
