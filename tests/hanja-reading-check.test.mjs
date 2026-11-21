@@ -1,3 +1,4 @@
+import {parseSrt,renderSrt} from '../srt-core.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
@@ -53,12 +54,13 @@ test('direct model-origin Hanja rejects reading mismatch and tracks unverified o
  assert.equal(literalOriginOption({...target,options:undefined},'韓國',{experimentalHanja:true,hanjaReadingCheck:true})?.origin_source,'model-unverified');
 });
 
-test('the page identifies dictionary-backed and model-unverified annotations',async()=>{
- const [js,css]=await Promise.all([
-  fs.readFile(new URL('../content.js',import.meta.url),'utf8'),
-  fs.readFile(new URL('../content.css',import.meta.url),'utf8')
- ]);
- assert.ok(js.includes('data-kra-source'));
- assert.ok(js.includes('model-unverified'));
- assert.ok(css.includes('ruby.kra-ruby[data-kra-source="model-unverified"]'));
+test('SRT writes accepted experimental Hanja as inline source annotations, not web ruby',()=>{
+ const source='1\n00:00:01,000 --> 00:00:02,000\n한국\n';
+ const doc=parseSrt(source);
+ const id=doc.sentences[0].id;
+ const result=renderSrt(doc,new Map([[id,[{
+  start:0,end:2,surface:'한국',replacement:'韓國',
+  type:'hanja',origin_source:'model-unverified'
+ }]]]));
+ assert.equal(result,source.replace('한국','韓國(한국)'));
 });

@@ -6,6 +6,7 @@ import {literalOriginOption} from '../experimental-options.js';
 import {buildSessionHanjaGlossary} from '../session-hanja-glossary.js';
 import {protectRepeatedArticleNames} from '../article-name-consistency.js';
 import {buildReviewInstructions} from '../review-payload.js';
+import {parseSrt,renderSrt} from '../srt-core.js';
 
 const keep=surface=>({choice_id:null,type:'keep',replacement:surface,entry_id:null,definitions:[]});
 const hanja=(id,replacement)=>({choice_id:id,type:'hanja',replacement,entry_id:id,definitions:['dictionary entry']});
@@ -19,8 +20,8 @@ test('quoted JSON null is never painted as a Latin model origin',()=>{
  assert.equal(literalOriginOption(t,'null',{experimentalLoanword:true}),null);
  const reply=validateExperimentalChoices([t],{results:[row]},{experimentalLoanword:true});
  assert.equal(reply.accepted[0].option.type,'keep');
- const content=readFileSync(new URL('../content.js',import.meta.url),'utf8');
- assert.match(content,/choiceId\.toLowerCase\(\)==='null'/);
+ const source='1\n00:00:01,000 --> 00:00:02,000\n도\n';
+ assert.equal(renderSrt(parseSrt(source),new Map()),source);
 });
 
 test('dictionary c/n selection does not depend on the experimental reading checker',()=>{

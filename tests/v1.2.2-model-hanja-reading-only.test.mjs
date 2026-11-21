@@ -100,14 +100,10 @@ test('the optional checker still rejects model-written Hanja mismatches when ON,
  }
 });
 
-test('reading check is absent from dictionary selection and disconnected dictionary recovery',()=>{
+test('SRT dictionary selection and manual recovery do not apply the phonetic table to c/n choices',()=>{
  const choice=readFileSync(new URL('../choice-review.js',import.meta.url),'utf8');
- const page=readFileSync(new URL('../content.js',import.meta.url),'utf8');
+ const manual=readFileSync(new URL('../manual-review.js',import.meta.url),'utf8');
  assert.doesNotMatch(choice,/readingCompatibleModelChoice/);
- const off=page.indexOf('async function applyManualRecovery(');
- const stop=page.indexOf('function panelStatus(',off);
- assert.ok(off>0&&stop>off);
- const recovery=page.slice(off,stop);
- assert.doesNotMatch(recovery,/validateModelHanjaReadings/);
- assert.match(page,/task\.manualBackup\?\.hanjaReadingCheck===true/);
+ assert.doesNotMatch(manual,/validateModelHanjaReadings/);
+ assert.match(manual,/hanjaReadingCheck:current\.hanjaReadingCheck/);
 });

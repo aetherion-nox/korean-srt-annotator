@@ -35,6 +35,8 @@ test('experimental prompt is opt-in and shares dictionary pools', () => {
  assert.equal(payload.payload.format,'shared-pools-v4');
  assert.equal(payload.payload.targets.length,1);
  assert.equal(validateChoices([target],{results:[{t:'t0',c:'c0'}]}).accepted.length,1);
- assert.equal(validateChoices([target],{results:[{t:'t0',c:'invalid'}]}).accepted[0].option.type,'keep');
+ const bad=validateChoices([target],{results:[{t:'t0',c:'invalid'}]});
+ assert.equal(bad.accepted.length,0);
+ assert.equal(bad.unresolved.length,1);
  assert.equal(validateExperimentalChoices([target],{results:[{t:'t0',c:null}]},{experimentalHanja:false}).accepted.length,1);
 });
